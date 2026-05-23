@@ -1,32 +1,25 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import os
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
-from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from crew_runner import (
-    AGENTS_FILE,
-    DEFAULT_TOPIC,
-    MODEL_ALIASES,
-    ROOT,
-    TASKS_FILE,
-    config_to_dicts,
-    default_model_alias,
-    load_agent_configs,
-    load_json_file,
-    load_task_configs,
-    run_crew,
-    save_json_file,
-    validate_configs,
-)
+from crewai_multiagent_demo.config.loader import ConfigLoader
+from crewai_multiagent_demo.config.schema import config_to_dicts
+from crewai_multiagent_demo.core.runner import DEFAULT_TOPIC, run_workflow
+from crewai_multiagent_demo.llm.model_registry import MODEL_REGISTRY
+from crewai_multiagent_demo.utils.environment import has_api_key, load_project_env
+from crewai_multiagent_demo.utils.paths import DEFAULT_CONFIG_DIR, DEFAULT_OUTPUT_DIR, PROJECT_ROOT
+
+
+AGENTS_FILE = DEFAULT_CONFIG_DIR / "agents.json"
+TASKS_FILE = DEFAULT_CONFIG_DIR / "tasks.json"
 
 
 st.set_page_config(
@@ -45,21 +38,16 @@ CUSTOM_CSS = """
     border-radius: 8px;
     padding: 0.75rem 0.85rem;
     margin-bottom: 0.5rem;
-    background: rgba(250, 250, 250, 0.7);
+    background: rgba(250, 250, 250, 0.72);
   }
   .event-title { font-weight: 650; margin-bottom: 0.2rem; }
   .muted { color: rgba(49, 51, 63, 0.65); font-size: 0.9rem; }
-  .small-code {
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    font-size: 0.84rem;
-    color: rgba(49, 51, 63, 0.72);
-  }
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-load_dotenv(ROOT / ".env")
+load_project_env(PROJECT_ROOT / ".env")
 
 
 def init_state() -> None:
@@ -74,13 +62,13 @@ def event_label(event_type: str) -> str:
         "run_started": "运行开始",
         "task_completed": "任务完成",
         "run_completed": "运行完成",
+        "run_failed": "运行失败",
     }
     return labels.get(event_type, event_type)
 
 
 def render_event(event: dict[str, Any]) -> None:
     title = event_label(str(event.get("type", "")))
-    time = event.get("time", "")
     details = []
     if event.get("agent"):
         details.append(f"Agent: {event['agent']}")
@@ -88,13 +76,15 @@ def render_event(event: dict[str, Any]) -> None:
         details.append(f"Model: {event['model']}")
     if event.get("elapsed_seconds") is not None:
         details.append(f"{float(event['elapsed_seconds']):.2f}s")
+    if event.get("error"):
+        details.append(str(event["error"]))
     body = " · ".join(details)
 
     st.markdown(
         f"""
         <div class="event-card">
           <div class="event-title">{title}</div>
-          <div class="muted">{time} {body}</div>
+          <div class="muted">{event.get("time", "")} {body}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -103,14 +93,15 @@ def render_event(event: dict[str, Any]) -> None:
 
 def render_run_page() -> None:
     st.title("Multiagent Studio")
-    st.caption("用可视化界面运行、观察和调整 CrewAI 多 Agent 工作流。")
+    st.caption("运行、观察和调整 CrewAI 多 Agent 工作流。")
 
     with st.sidebar:
         st.subheader("运行设置")
+        aliases = list(MODEL_REGISTRY.aliases)
         model_alias = st.radio(
             "模型档位",
-            options=sorted(MODEL_ALIASES),
-            index=sorted(MODEL_ALIASES).index(default_model_alias()),
+            options=aliases,
+            index=aliases.index(MODEL_REGISTRY.default_alias()),
             horizontal=True,
         )
         topic = st.text_area(
@@ -119,17 +110,15 @@ def render_run_page() -> None:
             height=130,
             placeholder="输入你希望多 Agent 分析的问题。",
         )
-        has_key = bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
-        if not has_key:
+        if not has_api_key():
             st.warning("未检测到 API key。请先在 .env 中配置 DEEPSEEK_API_KEY。")
-
         run_clicked = st.button("运行工作流", type="primary", use_container_width=True)
 
     if run_clicked:
         st.session_state.events = []
         st.session_state.last_result = None
 
-        if not has_key:
+        if not has_api_key():
             st.error("缺少 API key，无法运行。")
             return
 
@@ -146,7 +135,7 @@ def render_run_page() -> None:
                     render_event(item)
 
         try:
-            result = run_crew(topic=topic, model_alias=model_alias, on_event=on_event)
+            result = run_workflow(topic=topic, model_alias=model_alias, on_event=on_event)
         except Exception as exc:
             progress.empty()
             st.error(f"运行失败：{exc}")
@@ -165,11 +154,11 @@ def render_run_page() -> None:
             for event in st.session_state.events:
                 render_event(event)
         else:
-            st.info("点击左侧运行后，这里会显示任务状态、负责 agent 和公开输出节点。")
+            st.info("点击运行后，这里会显示公开事件、任务完成状态和输出节点。")
 
         st.subheader("说明")
         st.write(
-            "这里展示的是 CrewAI 公开事件、任务输出和运行日志。模型隐藏推理链通常不会通过 API 暴露，因此不会伪造或强行展示。"
+            "这里展示的是 CrewAI 公开事件和任务输出。不会伪造或展示隐藏推理链。"
         )
 
     with right:
@@ -203,16 +192,8 @@ def render_run_page() -> None:
             st.write("- events.json")
 
 
-def render_json_editor(
-    *,
-    title: str,
-    description: str,
-    state_key: str,
-    file_path: Path,
-) -> None:
+def render_json_editor(title: str, state_key: str, file_path: Path) -> None:
     st.subheader(title)
-    st.caption(description)
-
     raw_text = st.text_area(
         f"{title} JSON",
         value=st.session_state[state_key],
@@ -224,8 +205,7 @@ def render_json_editor(
     controls = st.columns([1, 1, 4])
     if controls[0].button(f"保存 {title}", use_container_width=True):
         try:
-            parsed = json.loads(raw_text)
-            save_json_file(file_path, parsed)
+            ConfigLoader.save_json_file(file_path, json.loads(raw_text))
         except Exception as exc:
             st.error(f"保存失败：{exc}")
         else:
@@ -240,7 +220,7 @@ def render_agents_table_editor() -> None:
     st.subheader("Agents")
     st.caption("直接在表格中新增、删除或修改角色。")
     edited = st.data_editor(
-        load_json_file(AGENTS_FILE),
+        ConfigLoader.load_json_file(AGENTS_FILE),
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
@@ -255,7 +235,7 @@ def render_agents_table_editor() -> None:
     )
     if st.button("保存 Agents 表格", type="primary"):
         try:
-            save_json_file(AGENTS_FILE, edited)
+            ConfigLoader.save_json_file(AGENTS_FILE, edited)
             st.session_state.agents_editor = AGENTS_FILE.read_text(encoding="utf-8")
         except Exception as exc:
             st.error(f"保存失败：{exc}")
@@ -264,7 +244,7 @@ def render_agents_table_editor() -> None:
 
 
 def task_rows_for_editor() -> list[dict[str, Any]]:
-    rows = load_json_file(TASKS_FILE)
+    rows = ConfigLoader.load_json_file(TASKS_FILE)
     for row in rows:
         row["context_task_ids"] = ", ".join(row.get("context_task_ids", []))
     return rows
@@ -278,11 +258,7 @@ def normalize_task_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if isinstance(context_value, list):
             context_ids = [str(item).strip() for item in context_value if str(item).strip()]
         else:
-            context_ids = [
-                item.strip()
-                for item in str(context_value).split(",")
-                if item.strip()
-            ]
+            context_ids = [item.strip() for item in str(context_value).split(",") if item.strip()]
         row["context_task_ids"] = context_ids
         normalized.append(row)
     return normalized
@@ -309,7 +285,7 @@ def render_tasks_table_editor() -> None:
     )
     if st.button("保存 Tasks 表格", type="primary"):
         try:
-            save_json_file(TASKS_FILE, normalize_task_rows(edited))
+            ConfigLoader.save_json_file(TASKS_FILE, normalize_task_rows(edited))
             st.session_state.tasks_editor = TASKS_FILE.read_text(encoding="utf-8")
         except Exception as exc:
             st.error(f"保存失败：{exc}")
@@ -319,7 +295,7 @@ def render_tasks_table_editor() -> None:
 
 def render_config_page() -> None:
     st.title("配置中心")
-    st.caption("查看、修改、新增或删除 agent 与 task。保存后下一次运行会使用新配置。")
+    st.caption("查看、修改、新增或删除 agent 和 task。保存后下一次运行会使用新配置。")
 
     agent_tab, task_tab, json_tab, validate_tab = st.tabs(["Agents", "Tasks", "JSON", "配置检查"])
     with agent_tab:
@@ -327,37 +303,28 @@ def render_config_page() -> None:
     with task_tab:
         render_tasks_table_editor()
     with json_tab:
-        render_json_editor(
-            title="Agents",
-            description="每个 agent 需要 id、role、goal、backstory 和 enabled。",
-            state_key="agents_editor",
-            file_path=AGENTS_FILE,
-        )
-        render_json_editor(
-            title="Tasks",
-            description="每个 task 需要 id、description、expected_output、agent_id、context_task_ids 和 enabled。",
-            state_key="tasks_editor",
-            file_path=TASKS_FILE,
-        )
+        render_json_editor("Agents", "agents_editor", AGENTS_FILE)
+        render_json_editor("Tasks", "tasks_editor", TASKS_FILE)
     with validate_tab:
         st.subheader("当前配置")
         if st.button("检查配置", type="primary"):
             try:
-                validate_configs(load_agent_configs(), load_task_configs())
+                ConfigLoader(DEFAULT_CONFIG_DIR).load(validate=True)
             except Exception as exc:
                 st.error(f"配置有问题：{exc}")
             else:
                 st.success("配置检查通过。")
 
+        config = ConfigLoader(DEFAULT_CONFIG_DIR).load(validate=False)
         st.write("Agents")
-        st.dataframe(config_to_dicts(load_agent_configs()), use_container_width=True)
+        st.dataframe(config_to_dicts(config.agents), use_container_width=True)
         st.write("Tasks")
-        st.dataframe(config_to_dicts(load_task_configs()), use_container_width=True)
+        st.dataframe(config_to_dicts(config.tasks), use_container_width=True)
 
 
 def render_history_page() -> None:
     st.title("历史输出")
-    output_root = ROOT / "outputs"
+    output_root = DEFAULT_OUTPUT_DIR
     if not output_root.exists():
         st.info("还没有输出目录。")
         return
@@ -387,11 +354,7 @@ def render_history_page() -> None:
 
 def main() -> None:
     init_state()
-    page = st.sidebar.radio(
-        "页面",
-        ["运行", "配置", "历史"],
-        label_visibility="collapsed",
-    )
+    page = st.sidebar.radio("页面", ["运行", "配置", "历史"], label_visibility="collapsed")
     if page == "运行":
         render_run_page()
     elif page == "配置":

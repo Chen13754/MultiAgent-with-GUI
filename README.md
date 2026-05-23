@@ -1,28 +1,53 @@
-# CrewAI 通用问题解决多 Agent Demo
+# CrewAI 多 Agent 通用问题解决框架
 
-这个 Demo 用 CrewAI 搭了一个小型“通用问题解决团队”：
+这是一个基于 CrewAI 的多 Agent 通用问题解决应用。项目已经从单文件 demo 重构为可维护的 Python 包，支持 CLI、Streamlit UI、JSON 配置、运行输出归档、事件记录和基础测试。
+
+默认工作流包含 4 个角色：
 
 - `Problem Analyst`：拆解问题背景、目标、约束、关键矛盾和成功标准
-- `Solution Strategist`：基于问题分析设计可执行的解决方案
-- `Critical Reviewer`：审查方案风险、遗漏、脆弱假设和过度设计
-- `Executive Summarizer`：在完整报告之外额外生成一份精简报告
+- `Solution Strategist`：基于分析设计可执行方案
+- `Critical Reviewer`：评审方案并生成完整正式报告
+- `Executive Summarizer`：生成 500 字以内的精简报告
 
-默认示例任务是：分析并解决一个需要多方权衡的复杂问题。你可以在运行时传入自己的主题。
+## 目录结构
 
-## 项目内依赖策略
+```text
+src/
+  crewai_multiagent_demo/
+    cli.py
+    core/
+      crew_builder.py
+      events.py
+      outputs.py
+      runner.py
+      workflow.py
+    config/
+      loader.py
+      schema.py
+      validation.py
+    domain/
+      agents.py
+      tasks.py
+      run_result.py
+    llm/
+      model_registry.py
+      provider.py
+    utils/
+      environment.py
+      paths.py
+  main.py
+  ui_app.py
+config/
+  agents.json
+  tasks.json
+tests/
+```
 
-为了尽量不污染全局环境，建议把所有东西都放在当前项目目录：
+`src/main.py` 和 `src/ui_app.py` 是兼容入口；核心业务逻辑在 `crewai_multiagent_demo` 包内。
 
-- 虚拟环境：`.venv/`
-- pip 下载缓存：`.cache/pip/`
-- CrewAI 运行存储：`.cache/crewai/`
-- Windows 应用数据兼容目录：`.cache/localappdata/`
-- 运行输出：`outputs/` 下按每次运行时间创建的子目录
-- 密钥配置：`.env`
+## 本地环境
 
-## 初始化
-
-在本机有 Python 的情况下：
+为了不污染全局环境，建议把虚拟环境、pip 缓存、CrewAI 缓存和输出都放在项目目录内。
 
 ```powershell
 python -m venv .venv
@@ -31,15 +56,13 @@ $env:PIP_CACHE_DIR="$PWD\.cache\pip"
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## 配置
-
-复制 `.env.template` 为 `.env`，填入你的 API key：
+复制环境变量模板：
 
 ```powershell
 Copy-Item .env.template .env
 ```
 
-然后编辑 `.env`：
+编辑 `.env`：
 
 ```text
 DEEPSEEK_API_KEY=sk-...
@@ -52,84 +75,167 @@ CREWAI_TESTING=true
 OTEL_SDK_DISABLED=true
 ```
 
-## 运行
+不要提交 `.env`、`.venv`、`.cache` 或 `outputs`。
 
-### 可视化界面
+## CLI
 
-推荐使用可视化界面运行和调整多 Agent 工作流：
+校验配置，不调用模型：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py validate
+```
+
+列出模型档位：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py list-models
+```
+
+列出当前启用的 agents/tasks：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py list-config
+```
+
+运行默认主题：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py run
+```
+
+运行自定义主题和模型档位：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py run --model flash "如何降低一个小团队的软件交付延期风险？"
+.\.venv\Scripts\python.exe .\src\main.py run --model pro "如何设计一个企业内部 AI Agent 平台？"
+```
+
+可选参数：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py run --config-dir .\config --output-dir .\outputs --model flash "你的主题"
+```
+
+旧用法仍兼容：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\main.py --model flash "你的主题"
+```
+
+也可以使用 PowerShell 脚本：
+
+```powershell
+.\run.ps1 -Model flash "你的主题"
+```
+
+## Streamlit UI
 
 ```powershell
 .\ui.ps1
 ```
 
-或者：
+或：
 
 ```powershell
 .\run.ps1 -Ui
 ```
 
-启动后浏览器会打开 Streamlit 页面。界面支持：
+UI 支持运行工作流、查看事件和输出、编辑 `agents.json` / `tasks.json`、校验配置、查看历史输出。UI 层只负责交互展示，实际运行调用 `core.runner.run_workflow`。
 
-- 选择模型档位：`flash` 或 `pro`
-- 输入主题并运行多 Agent 工作流
-- 查看运行过程、任务输出、完整报告和精简报告
-- 查看历史输出
-- 在“配置”页新增、删除、启用、禁用和修改 agent/task
+## 配置 Agent 和 Task
 
-说明：界面展示的是 CrewAI 公开事件、任务状态、任务输出和日志，不展示模型隐藏推理链。隐藏推理链通常不会由模型/API 暴露，也不应伪造展示。
+默认配置文件就是示例配置：
 
-### 命令行
+- `config/agents.json`
+- `config/tasks.json`
 
-```powershell
-.\.venv\Scripts\python.exe .\src\main.py
+Agent 字段：
+
+```json
+{
+  "id": "problem_analyst",
+  "role": "Problem Analyst",
+  "goal": "把模糊问题拆成清晰结构。",
+  "backstory": "角色背景。",
+  "enabled": true
+}
 ```
 
-切换模型档位：
+Task 字段：
 
-```powershell
-.\.venv\Scripts\python.exe .\src\main.py --model flash
-.\.venv\Scripts\python.exe .\src\main.py --model pro
+```json
+{
+  "id": "analysis",
+  "name": "问题分析",
+  "description": "围绕主题《{topic}》做分析。",
+  "expected_output": "结构化中文问题分析。",
+  "agent_id": "problem_analyst",
+  "context_task_ids": [],
+  "enabled": true
+}
 ```
 
-模型档位对应 DeepSeek 正式模型名：
+添加新 task 时：
 
-- `flash`：`deepseek-v4-flash`
-- `pro`：`deepseek-v4-pro`
+1. 在 `agents.json` 中确认存在可用的 `agent_id`。
+2. 在 `tasks.json` 中新增 task。
+3. 用 `context_task_ids` 声明依赖的上游 task。
+4. 运行 `validate` 检查配置。
 
-脚本内部会自动加上 CrewAI/LiteLLM 需要的 `deepseek/` 供应商前缀。
+配置校验会检查重复 id、空字段、不存在或未启用的 agent、缺失 task、禁用 task 被依赖、循环依赖等问题。
 
-传入自定义主题：
+## 输出文件
 
-```powershell
-.\.venv\Scripts\python.exe .\src\main.py "如何降低一个小团队的软件交付延期风险"
-```
-
-使用 `run.ps1` 时也可以切换模型：
-
-```powershell
-.\run.ps1 -Model flash "如何降低一个小团队的软件交付延期风险"
-.\run.ps1 -Model pro "如何降低一个小团队的软件交付延期风险"
-```
-
-每次运行都会在 `outputs/` 下创建一个新的时间戳目录，例如：
+每次运行都会在 `outputs/` 下创建时间戳目录，例如：
 
 ```text
 outputs/20260515_142030/
 ```
 
-其中包含：
+包含：
 
-- `full_report.md`：完整报告
-- `summary_report.md`：精简报告
-- `run_metadata.md`：本次运行的模型、总用时和 token 用量
-- `events.json`：可视化界面使用的公开运行事件
-- `tasks/`：每个 task 的单独输出
+- `full_report.md`
+- `summary_report.md`
+- `run_metadata.md`
+- `events.json`
+- `tasks/` 下每个 task 的单独输出
 
-## 配置 agent 和 task
+`events.json` 只记录公开运行事件和任务输出，不伪造或保存隐藏推理链。
 
-默认配置放在：
+## 模型档位
 
-- `config/agents.json`
-- `config/tasks.json`
+模型档位定义在 `src/crewai_multiagent_demo/llm/model_registry.py`。
 
-你可以在可视化界面的“配置”页编辑，也可以直接改 JSON 文件。task 通过 `agent_id` 指定调用哪个 agent，通过 `context_task_ids` 指定依赖哪些前置 task。
+默认档位：
+
+- `flash` -> `deepseek-v4-flash`
+- `pro` -> `deepseek-v4-pro`
+
+CrewAI/LiteLLM 使用时会自动加上 `deepseek/` provider 前缀。
+
+添加新档位时，在 `ModelRegistry` 默认模型表中增加一个 `ModelSpec` 即可。
+
+## 测试
+
+测试只覆盖纯逻辑，不调用 LLM：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+当前覆盖：
+
+- config loader
+- config validation
+- model alias/model name 解析
+- output directory creation
+- event writing
+- task outputs 和 run metadata writing
+
+## 扩展点
+
+- 新 LLM provider 或模型档位：扩展 `llm/model_registry.py`
+- 新输出格式：扩展 `core/outputs.py`
+- 新运行模式：扩展 `cli.py` 和 `core/runner.py`
+- 新 UI 页面：扩展 `src/ui_app.py`，保持业务逻辑调用 core 层
+- 新 agent/task：修改 JSON 配置后运行 `validate`
