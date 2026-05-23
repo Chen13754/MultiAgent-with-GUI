@@ -9,8 +9,14 @@ from dotenv import load_dotenv
 from crewai_multiagent_demo.utils.paths import DEFAULT_CACHE_DIR, DEFAULT_ENV_FILE
 
 
+LAST_ENV_FILE: Path | None = None
+
+
 def configure_runtime_environment(project_root: Path | None = None) -> None:
     """Keep CrewAI and telemetry runtime files inside the project."""
+    env_project_root = os.getenv("MULTIAGENT_PROJECT_ROOT")
+    if project_root is None and env_project_root:
+        project_root = Path(env_project_root)
     root_cache = (project_root / ".cache") if project_root else DEFAULT_CACHE_DIR
     crewai_storage = root_cache / "crewai"
     local_app_data = root_cache / "localappdata"
@@ -23,10 +29,40 @@ def configure_runtime_environment(project_root: Path | None = None) -> None:
     os.environ["LOCALAPPDATA"] = str(local_app_data)
 
 
-def load_project_env(env_file: Path | None = None) -> None:
+def candidate_env_files(env_file: Path | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    explicit = os.getenv("MULTIAGENT_ENV_FILE")
+    project_root = os.getenv("MULTIAGENT_PROJECT_ROOT")
+    for value in (
+        env_file,
+        Path(explicit) if explicit else None,
+        Path.cwd() / ".env",
+        Path(project_root) / ".env" if project_root else None,
+        DEFAULT_ENV_FILE,
+    ):
+        if value is None:
+            continue
+        path = Path(value).expanduser()
+        if path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def load_project_env(env_file: Path | None = None) -> Path | None:
+    global LAST_ENV_FILE
     configure_runtime_environment()
     _configure_utf8_stdio()
-    load_dotenv(env_file or DEFAULT_ENV_FILE)
+    for candidate in candidate_env_files(env_file):
+        if candidate.exists():
+            load_dotenv(candidate, override=True)
+            LAST_ENV_FILE = candidate
+            return candidate
+    LAST_ENV_FILE = None
+    return None
+
+
+def loaded_env_file() -> Path | None:
+    return LAST_ENV_FILE
 
 
 def _configure_utf8_stdio() -> None:

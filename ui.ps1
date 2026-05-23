@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$UiApp = Join-Path $ProjectRoot "src\ui_app.py"
+$GuiApp = Join-Path $ProjectRoot "src\gui_app.py"
 $EnvFile = Join-Path $ProjectRoot ".env"
 
 if (-not (Test-Path $Python)) {
@@ -18,7 +18,7 @@ chcp 65001 > $null
 
 Push-Location $ProjectRoot
 try {
-    & $Python -m streamlit run $UiApp
+    & $Python $GuiApp
 }
 finally {
     Pop-Location
