@@ -44,11 +44,11 @@ try {
     }
 
     if ([string]::IsNullOrWhiteSpace($ResolvedTopic)) {
-        & $Python $Main @Args
+        & $Python $Main run @Args
     }
     else {
         $Args += $ResolvedTopic
-        & $Python $Main @Args
+        & $Python $Main run @Args
     }
 }
 finally {
