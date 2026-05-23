@@ -1,6 +1,6 @@
 # CrewAI 多 Agent 通用问题解决框架
 
-这是一个基于 CrewAI 的多 Agent 通用问题解决应用。项目已经从单文件 demo 重构为可维护的 Python 包，支持 CLI、Streamlit UI、JSON 配置、运行输出归档、事件记录和基础测试。
+这是一个基于 CrewAI 的多 Agent 通用问题解决应用。项目已经从单文件 demo 重构为可维护的 Python 包，支持 CLI、PySide6 桌面 GUI、JSON 配置、运行输出归档、事件记录和基础测试。
 
 默认工作流包含 4 个角色：
 
@@ -36,7 +36,7 @@ src/
       environment.py
       paths.py
   main.py
-  ui_app.py
+  gui_app.py
 config/
   agents.json
   tasks.json
@@ -128,7 +128,15 @@ OTEL_SDK_DISABLED=true
 .\run.ps1 -Model flash "你的主题"
 ```
 
-## Streamlit UI
+## 桌面 GUI
+
+双击启动：
+
+```text
+启动GUI.bat
+```
+
+`启动GUI.bat` 会优先运行 `dist\MultiagentStudio\MultiagentStudio.exe`；如果还没有打包，则自动回退到 `.venv` 源码启动。
 
 ```powershell
 .\ui.ps1
@@ -140,7 +148,14 @@ OTEL_SDK_DISABLED=true
 .\run.ps1 -Ui
 ```
 
-UI 支持运行工作流、查看事件和输出、编辑 `agents.json` / `tasks.json`、校验配置、查看历史输出。UI 层只负责交互展示，实际运行调用 `core.runner.run_workflow`。
+桌面 GUI 支持运行工作流、查看事件和输出、编辑 `agents.json` / `tasks.json`、校验配置、查看历史输出。GUI 层只负责交互展示，实际运行调用 `core.runner.run_workflow`。
+
+打包 Windows 可执行文件：
+
+```powershell
+.\build-gui.ps1
+.\dist\MultiagentStudio\MultiagentStudio.exe
+```
 
 ## 配置 Agent 和 Task
 
@@ -237,5 +252,5 @@ CrewAI/LiteLLM 使用时会自动加上 `deepseek/` provider 前缀。
 - 新 LLM provider 或模型档位：扩展 `llm/model_registry.py`
 - 新输出格式：扩展 `core/outputs.py`
 - 新运行模式：扩展 `cli.py` 和 `core/runner.py`
-- 新 UI 页面：扩展 `src/ui_app.py`，保持业务逻辑调用 core 层
+- 新 GUI 页面：扩展 `src/gui_app.py`，保持业务逻辑调用 core 层
 - 新 agent/task：修改 JSON 配置后运行 `validate`
