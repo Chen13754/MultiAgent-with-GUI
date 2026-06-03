@@ -16,13 +16,32 @@ def _required_str(item: dict[str, Any], field: str, *, kind: str, index: int) ->
     return value
 
 
+def _optional_bool(item: dict[str, Any], field: str, *, kind: str, index: int, default: bool = True) -> bool:
+    if field not in item:
+        return default
+    value = item[field]
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    raise ValueError(f"{kind}[{index}] {field} must be a boolean")
+
+
 def parse_agent_config(item: dict[str, Any], index: int) -> AgentConfig:
     return AgentConfig(
         id=_required_str(item, "id", kind="agent", index=index),
         role=_required_str(item, "role", kind="agent", index=index),
         goal=_required_str(item, "goal", kind="agent", index=index),
         backstory=_required_str(item, "backstory", kind="agent", index=index),
-        enabled=bool(item.get("enabled", True)),
+        enabled=_optional_bool(item, "enabled", kind="agent", index=index),
     )
 
 
@@ -45,7 +64,7 @@ def parse_task_config(item: dict[str, Any], index: int) -> TaskConfig:
         expected_output=_required_str(item, "expected_output", kind="task", index=index),
         agent_id=_required_str(item, "agent_id", kind="task", index=index),
         context_task_ids=context_task_ids,
-        enabled=bool(item.get("enabled", True)),
+        enabled=_optional_bool(item, "enabled", kind="task", index=index),
     )
 
 

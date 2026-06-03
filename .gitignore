@@ -1,6 +1,8 @@
 .venv/
 .cache/
 .env
+/MultiagentStudio.exe
+/_internal/
 outputs/
 build/
 dist/

@@ -4,8 +4,15 @@ import sys
 from pathlib import Path
 
 
+def _frozen_project_root(executable: Path) -> Path:
+    exe_dir = executable.resolve().parent
+    if exe_dir.name == "MultiagentStudio" and exe_dir.parent.name == "dist":
+        return exe_dir.parents[1]
+    return exe_dir
+
+
 if getattr(sys, "frozen", False):
-    PROJECT_ROOT = Path(sys.executable).resolve().parent
+    PROJECT_ROOT = _frozen_project_root(Path(sys.executable))
     RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT)).resolve()
 else:
     PROJECT_ROOT = Path(__file__).resolve().parents[3]

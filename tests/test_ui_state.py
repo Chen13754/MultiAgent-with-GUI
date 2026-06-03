@@ -21,7 +21,8 @@ def test_progress_from_events_counts_completed_tasks() -> None:
         {"type": "task_completed"},
         {"type": "task_completed"},
     ]
-    assert progress_from_events(events) == 50
+    assert progress_from_events(events, total_tasks=4) == 52
+    assert progress_from_events(events, total_tasks=2) == 95
 
 
 def test_task_rows_round_trip_context_task_ids() -> None:
@@ -38,4 +39,3 @@ def test_task_rows_round_trip_context_task_ids() -> None:
 
     normalized = normalize_task_rows(editable)
     assert normalized[0]["context_task_ids"] == ["analysis", "solution"]
-

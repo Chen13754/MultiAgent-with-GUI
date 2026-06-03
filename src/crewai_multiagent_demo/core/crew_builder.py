@@ -3,30 +3,10 @@ from __future__ import annotations
 from crewai_multiagent_demo.config.validation import validate_configs
 from crewai_multiagent_demo.core.events import EventCallback
 from crewai_multiagent_demo.core.outputs import task_output_text
+from crewai_multiagent_demo.core.workflow import ordered_enabled_tasks
 from crewai_multiagent_demo.domain.agents import AgentConfig
 from crewai_multiagent_demo.domain.tasks import TaskConfig
 from crewai_multiagent_demo.utils.environment import configure_runtime_environment
-
-
-def _ordered_enabled_tasks(tasks_config: list[TaskConfig]) -> list[TaskConfig]:
-    by_id = {task.id: task for task in tasks_config if task.enabled}
-    ordered: list[TaskConfig] = []
-    added: set[str] = set()
-
-    def add_with_dependencies(task: TaskConfig) -> None:
-        if task.id in added:
-            return
-        for dependency_id in task.context_task_ids:
-            dependency = by_id.get(dependency_id)
-            if dependency is not None:
-                add_with_dependencies(dependency)
-        ordered.append(task)
-        added.add(task.id)
-
-    for task in tasks_config:
-        if task.enabled:
-            add_with_dependencies(task)
-    return ordered
 
 
 def build_crew(
@@ -55,7 +35,7 @@ def build_crew(
 
     task_by_id: dict[str, Task] = {}
     tasks: list[Task] = []
-    for config in _ordered_enabled_tasks(tasks_config):
+    for config in ordered_enabled_tasks(tasks_config):
         task = Task(
             description=config.description,
             expected_output=config.expected_output,

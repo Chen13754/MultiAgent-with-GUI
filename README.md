@@ -32,6 +32,12 @@ src/
     llm/
       model_registry.py
       provider.py
+    gui/
+      pages.py
+      services.py
+      state.py
+      styles.py
+      widgets.py
     utils/
       environment.py
       paths.py
@@ -43,7 +49,7 @@ config/
 tests/
 ```
 
-`src/main.py` 和 `src/ui_app.py` 是兼容入口；核心业务逻辑在 `crewai_multiagent_demo` 包内。
+`src/main.py` 和 `src/gui_app.py` 是入口；核心业务逻辑在 `crewai_multiagent_demo` 包内。架构分层、扩展点和验证命令见 `docs/ARCHITECTURE.md`。
 
 ## 本地环境
 
@@ -130,32 +136,21 @@ OTEL_SDK_DISABLED=true
 
 ## 桌面 GUI
 
-双击启动：
-
-```text
-启动GUI.bat
-```
-
-`启动GUI.bat` 会优先运行 `dist\MultiagentStudio\MultiagentStudio.exe`；如果还没有打包，则自动回退到 `.venv` 源码启动。
+桌面 GUI 的用户入口只保留 Windows 可执行文件。首次使用或代码更新后，先在项目目录内构建：
 
 ```powershell
-.\ui.ps1
+.\build-gui.ps1
 ```
 
-或：
+构建完成后启动：
 
 ```powershell
-.\run.ps1 -Ui
+.\MultiagentStudio.exe
 ```
 
 桌面 GUI 支持运行工作流、查看事件和输出、编辑 `agents.json` / `tasks.json`、校验配置、查看历史输出。GUI 层只负责交互展示，实际运行调用 `core.runner.run_workflow`。
 
-打包 Windows 可执行文件：
-
-```powershell
-.\build-gui.ps1
-.\dist\MultiagentStudio\MultiagentStudio.exe
-```
+`build-gui.ps1` 使用项目内 `.venv` 和 `.cache` 完成打包，避免污染全局 Python 环境。构建脚本会把 `MultiagentStudio.exe` 和运行依赖目录 `_internal/` 放到项目根目录；用户只需要启动 `MultiagentStudio.exe`。
 
 ## 配置 Agent 和 Task
 

@@ -88,3 +88,19 @@ def write_run_outputs(
     write_run_metadata(run_dir / "run_metadata.md", **metadata)
     write_task_outputs(run_dir, task_outputs)
     return run_dir
+
+
+def write_failed_run_outputs(
+    *,
+    output_dir: str | Path,
+    error: str,
+    metadata: dict[str, Any],
+) -> Path:
+    run_dir = create_output_run_dir(output_dir)
+    failure_report = f"# Run failed\n\n{error}\n"
+    (run_dir / "full_report.md").write_text(failure_report, encoding="utf-8")
+    (run_dir / "summary_report.md").write_text(failure_report, encoding="utf-8")
+    write_run_metadata(run_dir / "run_metadata.md", **metadata)
+    with (run_dir / "run_metadata.md").open("a", encoding="utf-8") as file:
+        file.write(f"- status: failed\n- error: {error}\n")
+    return run_dir
