@@ -41,6 +41,49 @@ def test_loader_reads_compatible_json(tmp_path) -> None:
     assert config.tasks[0].name == "analysis"
 
 
+def test_loader_parses_string_enabled_flags(tmp_path) -> None:
+    write_config(
+        tmp_path,
+        [
+            {
+                "id": "analyst",
+                "role": "Analyst",
+                "goal": "Analyze",
+                "backstory": "Careful analyst",
+                "enabled": "false",
+            },
+            {
+                "id": "writer",
+                "role": "Writer",
+                "goal": "Write",
+                "backstory": "Careful writer",
+                "enabled": "true",
+            },
+        ],
+        [
+            {
+                "id": "summary",
+                "description": "Summarize {topic}",
+                "expected_output": "Summary",
+                "agent_id": "writer",
+                "enabled": "0",
+            },
+            {
+                "id": "review",
+                "description": "Review {topic}",
+                "expected_output": "Review",
+                "agent_id": "writer",
+                "enabled": "1",
+            },
+        ],
+    )
+
+    config = ConfigLoader(tmp_path).load()
+
+    assert [agent.enabled for agent in config.agents] == [False, True]
+    assert [task.enabled for task in config.tasks] == [False, True]
+
+
 def test_loader_reports_json_error(tmp_path) -> None:
     tmp_path.mkdir(exist_ok=True)
     (tmp_path / "agents.json").write_text("[", encoding="utf-8")

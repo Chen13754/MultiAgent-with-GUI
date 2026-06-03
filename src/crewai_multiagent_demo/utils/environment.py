@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from crewai_multiagent_demo.utils.paths import DEFAULT_CACHE_DIR, DEFAULT_ENV_FILE
+from crewai_multiagent_demo.utils.paths import DEFAULT_CACHE_DIR, DEFAULT_ENV_FILE, PROJECT_ROOT
 
 
 LAST_ENV_FILE: Path | None = None
@@ -38,6 +38,7 @@ def candidate_env_files(env_file: Path | None = None) -> list[Path]:
         Path(explicit) if explicit else None,
         Path.cwd() / ".env",
         Path(project_root) / ".env" if project_root else None,
+        PROJECT_ROOT / ".env",
         DEFAULT_ENV_FILE,
     ):
         if value is None:
@@ -76,8 +77,23 @@ def has_api_key() -> bool:
     return bool(os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"))
 
 
-def require_api_key() -> None:
-    if not has_api_key():
-        raise RuntimeError(
-            "缺少 API key。请复制 .env.template 为 .env，并填写 DEEPSEEK_API_KEY。"
-        )
+def api_key_env_names_for_model(crewai_model: str) -> tuple[str, ...]:
+    if crewai_model.startswith("deepseek/"):
+        return ("DEEPSEEK_API_KEY",)
+    return ("DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+
+
+def has_api_key_for_model(crewai_model: str) -> bool:
+    return any(os.getenv(name) for name in api_key_env_names_for_model(crewai_model))
+
+
+def require_api_key(crewai_model: str | None = None) -> None:
+    if crewai_model is None:
+        if has_api_key():
+            return
+        required_names = ("DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+    else:
+        if has_api_key_for_model(crewai_model):
+            return
+        required_names = api_key_env_names_for_model(crewai_model)
+    raise RuntimeError(f"Missing API key. Please set one of: {', '.join(required_names)}.")
