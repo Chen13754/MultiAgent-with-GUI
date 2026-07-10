@@ -12,6 +12,7 @@ def _find_duplicates(values: list[str]) -> list[str]:
 
 
 def validate_configs(agents: list[AgentConfig], tasks: list[TaskConfig]) -> None:
+    allowed_artifact_roles = {"none", "full_report", "summary"}
     for agent in agents:
         for field_name in ("id", "role", "goal", "backstory"):
             if not getattr(agent, field_name).strip():
@@ -20,6 +21,11 @@ def validate_configs(agents: list[AgentConfig], tasks: list[TaskConfig]) -> None
         for field_name in ("id", "name", "description", "expected_output", "agent_id"):
             if not getattr(task, field_name).strip():
                 raise ValueError(f"task '{task.id or '<empty>'}' 字段不能为空: {field_name}")
+        if task.artifact_role not in allowed_artifact_roles:
+            raise ValueError(
+                f"task '{task.id}' artifact_role 无效: {task.artifact_role}。"
+                "可用值: none, full_report, summary"
+            )
 
     duplicate_agents = _find_duplicates([agent.id for agent in agents])
     if duplicate_agents:
@@ -28,6 +34,11 @@ def validate_configs(agents: list[AgentConfig], tasks: list[TaskConfig]) -> None
     duplicate_tasks = _find_duplicates([task.id for task in tasks])
     if duplicate_tasks:
         raise ValueError(f"重复的 task id: {', '.join(duplicate_tasks)}")
+
+    for role in ("full_report", "summary"):
+        owners = [task.id for task in tasks if task.enabled and task.artifact_role == role]
+        if len(owners) > 1:
+            raise ValueError(f"artifact_role '{role}' 只能分配给一个启用 task: {', '.join(owners)}")
 
     enabled_agents = {agent.id for agent in agents if agent.enabled}
     all_task_ids = {task.id for task in tasks}

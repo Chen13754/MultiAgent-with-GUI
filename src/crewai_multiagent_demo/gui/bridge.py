@@ -1,42 +1,65 @@
 from __future__ import annotations
 
 import json
-import re
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtCore import QUrl
 
+from crewai_multiagent_demo.config.loader import ConfigLoader
 from crewai_multiagent_demo.core.runner import run_workflow
+from crewai_multiagent_demo.domain.run_request import RunRequest
+from crewai_multiagent_demo.gui.run_process import WorkflowProcessWorker
 from crewai_multiagent_demo.gui.services import ConfigEditorService, HistoryService
-from crewai_multiagent_demo.gui.state import RunStatus, event_label, progress_from_events, status_label
+from crewai_multiagent_demo.gui.state import RunStatus, event_label, progress_from_events
 from crewai_multiagent_demo.llm.model_registry import MODEL_REGISTRY, ModelRegistry
+from crewai_multiagent_demo.utils.diagnostics import create_diagnostics_archive
 from crewai_multiagent_demo.utils.environment import has_api_key_for_model
-from crewai_multiagent_demo.utils.paths import DEFAULT_CONFIG_DIR, DEFAULT_OUTPUT_DIR
+from crewai_multiagent_demo.utils.files import atomic_write_json, atomic_write_text
+from crewai_multiagent_demo.utils.paths import (
+    BUNDLED_CONFIG_DIR,
+    DEFAULT_CACHE_DIR,
+    DEFAULT_CONFIG_DIR,
+    DEFAULT_ENV_FILE,
+    DEFAULT_OUTPUT_DIR,
+)
 
+PROTOCOL_VERSION = 1
 WorkflowRunner = Callable[..., object]
 ApiKeyChecker = Callable[[str], bool]
 
 
-class WorkflowWorker(QThread):
+class InlineWorkflowWorker(QThread):
+    """Test/development adapter; production runs use WorkflowProcessWorker."""
+
     eventReceived = Signal(dict)
     completed = Signal(object)
     failed = Signal(str)
+    cancelled = Signal(str)
 
-    def __init__(self, runner: WorkflowRunner, *, topic: str, model_alias: str) -> None:
+    def __init__(self, runner: WorkflowRunner, request: RunRequest) -> None:
         super().__init__()
         self._runner = runner
-        self._topic = topic
-        self._model_alias = model_alias
+        self.request = request
+
+    def request_cancel(self) -> None:
+        # Injected test runners are deliberately in-process and cannot be
+        # forcefully interrupted. The production path never uses this adapter.
+        return
 
     def run(self) -> None:
         try:
             result = self._runner(
-                topic=self._topic,
-                model_alias=self._model_alias,
+                topic=self.request.topic,
+                model_alias=self.request.model_alias,
+                config_dir=self.request.config_dir,
+                output_dir=self.request.output_dir,
+                run_id=self.request.run_id,
+                request_timeout_seconds=self.request.request_timeout_seconds,
+                max_retries=self.request.max_retries,
                 on_event=self.eventReceived.emit,
             )
         except Exception as exc:  # pragma: no cover - surfaced through the bridge.
@@ -46,7 +69,7 @@ class WorkflowWorker(QThread):
 
 
 class StudioBridge(QObject):
-    """The deliberately small, path-safe boundary between Qt and React."""
+    """Path-safe QWebChannel protocol adapter for the desktop UI."""
 
     runStateChanged = Signal(str)
     eventReceived = Signal(str)
@@ -58,6 +81,8 @@ class StudioBridge(QObject):
         *,
         config_dir: Path = DEFAULT_CONFIG_DIR,
         output_dir: Path = DEFAULT_OUTPUT_DIR,
+        env_file: Path = DEFAULT_ENV_FILE,
+        cache_dir: Path = DEFAULT_CACHE_DIR,
         legacy_output_dir: Path | None = None,
         runner: WorkflowRunner = run_workflow,
         registry: ModelRegistry = MODEL_REGISTRY,
@@ -66,11 +91,13 @@ class StudioBridge(QObject):
         super().__init__()
         self.config_service = ConfigEditorService(config_dir)
         self.output_dir = Path(output_dir)
+        self.env_file = Path(env_file)
+        self.cache_dir = Path(cache_dir)
         self.legacy_output_dir = Path(legacy_output_dir) if legacy_output_dir else None
         self._runner = runner
         self._registry = registry
         self._api_key_checker = api_key_checker
-        self._worker: WorkflowWorker | None = None
+        self._worker: WorkflowProcessWorker | InlineWorkflowWorker | None = None
         self._events: list[dict[str, Any]] = []
         self._last_result: object | None = None
         self._history_paths: dict[str, Path] = {}
@@ -81,30 +108,50 @@ class StudioBridge(QObject):
 
     @Slot(result=str)
     def bootstrap(self) -> str:
-        return self._json(self._response(data=self._snapshot()))
+        try:
+            return self._json(self._response(data=self._snapshot()))
+        except Exception as exc:
+            return self._json(
+                self._response(
+                    ok=False,
+                    code="bootstrap_failed",
+                    message=str(exc),
+                    data={
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "configPath": str(self.config_service.config_dir),
+                        "recoverable": True,
+                    },
+                )
+            )
 
     @Slot(str, str, result=str)
-    def startRun(self, topic: str, model_alias: str) -> str:  # noqa: N802 - QWebChannel API.
+    def startRun(self, topic: str, model_alias: str) -> str:  # noqa: N802
         if self.is_running():
             return self._json(self._response(ok=False, code="run_active", message="工作流正在运行。"))
-
         try:
             model = self._registry.resolve(model_alias)
             self.config_service.validate_current_config()
         except Exception as exc:
             return self._json(self._response(ok=False, code="invalid_config", message=str(exc)))
-
         if not self._api_key_checker(model.crewai_model):
-            message = "未检测到当前模型所需的 API key。请在本地 .env 中配置后重试。"
+            message = f"未检测到当前模型所需的 API key。请在设置中配置。配置文件：{self.env_file}"
             self._state = {**self._empty_state(), "status": RunStatus.FAILED.value, "error": message}
             self._emit_state()
             return self._json(self._response(ok=False, code="missing_api_key", message=message))
 
+        request = RunRequest.create(
+            topic=topic,
+            model_alias=model.alias,
+            config_dir=self.config_service.config_dir,
+            output_dir=self.output_dir,
+            env_file=self.env_file,
+        )
         self._events = []
         self._last_result = None
         self._state = {
             **self._empty_state(),
             "status": RunStatus.RUNNING.value,
+            "runId": request.run_id,
             "modelAlias": model.alias,
             "topic": topic.strip(),
             "taskCount": self.config_service.enabled_task_count(),
@@ -113,16 +160,36 @@ class StudioBridge(QObject):
         }
         self._emit_state()
 
-        self._worker = WorkflowWorker(self._runner, topic=topic, model_alias=model.alias)
-        self._worker.eventReceived.connect(self._handle_event)
-        self._worker.completed.connect(self._handle_completed)
-        self._worker.failed.connect(self._handle_failed)
-        self._worker.finished.connect(self._release_worker)
-        self._worker.start()
-        return self._json(self._response(data={"accepted": True}))
+        if self._runner is run_workflow:
+            worker: WorkflowProcessWorker | InlineWorkflowWorker = WorkflowProcessWorker(request)
+        else:
+            worker = InlineWorkflowWorker(self._runner, request)
+        self._worker = worker
+        worker.eventReceived.connect(self._handle_event)
+        worker.completed.connect(self._handle_completed)
+        worker.failed.connect(self._handle_failed)
+        worker.cancelled.connect(self._handle_cancelled)
+        worker.finished.connect(self._release_worker)
+        worker.start()
+        return self._json(self._response(data={"accepted": True, "runId": request.run_id}))
 
     @Slot(result=str)
-    def resetRun(self) -> str:  # noqa: N802 - QWebChannel API.
+    def cancelRun(self) -> str:  # noqa: N802
+        if not self.is_running() or self._worker is None:
+            return self._json(self._response(ok=False, code="run_inactive", message="当前没有正在运行的工作流。"))
+        self._worker.request_cancel()
+        self._state["activeAgent"] = "正在取消"
+        self._emit_state()
+        return self._json(self._response(data={"accepted": True}))
+
+    def shutdown(self, wait_ms: int = 5500) -> None:
+        if self._worker is None:
+            return
+        self._worker.request_cancel()
+        self._worker.wait(wait_ms)
+
+    @Slot(result=str)
+    def resetRun(self) -> str:  # noqa: N802
         if self.is_running():
             return self._json(self._response(ok=False, code="run_active", message="运行结束前不能重置。"))
         self._events = []
@@ -132,14 +199,14 @@ class StudioBridge(QObject):
         return self._json(self._response(data=self._state))
 
     @Slot(result=str)
-    def validateConfig(self) -> str:  # noqa: N802 - QWebChannel API.
+    def validateConfig(self) -> str:  # noqa: N802
         try:
             return self._json(self._response(data={"text": self.config_service.validation_text()}))
         except Exception as exc:
             return self._json(self._response(ok=False, code="invalid_config", message=str(exc)))
 
     @Slot(str, str, result=str)
-    def saveConfig(self, kind: str, payload_json: str) -> str:  # noqa: N802 - QWebChannel API.
+    def saveConfig(self, kind: str, payload_json: str) -> str:  # noqa: N802
         if self.is_running():
             return self._json(self._response(ok=False, code="run_active", message="运行中不能修改配置。"))
         try:
@@ -155,7 +222,7 @@ class StudioBridge(QObject):
         return self._json(self._response(data=self._config_snapshot()))
 
     @Slot(str, str, result=str)
-    def saveConfigBundle(self, agents_json: str, tasks_json: str) -> str:  # noqa: N802 - QWebChannel API.
+    def saveConfigBundle(self, agents_json: str, tasks_json: str) -> str:  # noqa: N802
         if self.is_running():
             return self._json(self._response(ok=False, code="run_active", message="运行中不能修改配置。"))
         try:
@@ -164,8 +231,51 @@ class StudioBridge(QObject):
             return self._json(self._response(ok=False, code="save_failed", message=str(exc)))
         return self._json(self._response(data=self._config_snapshot()))
 
+    @Slot(result=str)
+    def resetConfig(self) -> str:  # noqa: N802
+        if self.is_running():
+            return self._json(self._response(ok=False, code="run_active", message="运行中不能重置配置。"))
+        try:
+            document = ConfigLoader.load_json_file(BUNDLED_CONFIG_DIR / "workflow.json")
+            atomic_write_json(self.config_service.workflow_file, document)
+            return self._json(self._response(data=self._snapshot()))
+        except Exception as exc:
+            return self._json(self._response(ok=False, code="reset_failed", message=str(exc)))
+
     @Slot(str, result=str)
-    def loadHistory(self, record_id: str) -> str:  # noqa: N802 - QWebChannel API.
+    def saveApiKey(self, key: str) -> str:  # noqa: N802
+        cleaned = key.strip()
+        if len(cleaned) < 8 or "\n" in cleaned or "\r" in cleaned:
+            return self._json(self._response(ok=False, code="invalid_api_key", message="API key 格式无效。"))
+        try:
+            lines = self.env_file.read_text(encoding="utf-8").splitlines() if self.env_file.exists() else []
+            updated: list[str] = []
+            replaced = False
+            for line in lines:
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    updated.append(f"DEEPSEEK_API_KEY={cleaned}")
+                    replaced = True
+                else:
+                    updated.append(line)
+            if not replaced:
+                updated.append(f"DEEPSEEK_API_KEY={cleaned}")
+            atomic_write_text(self.env_file, "\n".join(updated) + "\n")
+            os.environ["DEEPSEEK_API_KEY"] = cleaned
+            return self._json(self._response(data={"configured": True, "envFile": str(self.env_file)}))
+        except Exception as exc:
+            return self._json(self._response(ok=False, code="save_key_failed", message=str(exc)))
+
+    @Slot(result=str)
+    def exportDiagnostics(self) -> str:  # noqa: N802
+        try:
+            archive = create_diagnostics_archive(self.cache_dir, self.output_dir)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(archive.parent)))
+            return self._json(self._response(data={"path": str(archive)}))
+        except Exception as exc:
+            return self._json(self._response(ok=False, code="diagnostics_failed", message=str(exc)))
+
+    @Slot(str, result=str)
+    def loadHistory(self, record_id: str) -> str:  # noqa: N802
         self._refresh_history_paths()
         path = self._history_paths.get(record_id)
         if path is None:
@@ -183,10 +293,12 @@ class StudioBridge(QObject):
         )
 
     @Slot(str, str, result=str)
-    def openLocation(self, target: str, record_id: str = "") -> str:  # noqa: N802 - QWebChannel API.
+    def openLocation(self, target: str, record_id: str = "") -> str:  # noqa: N802
         path: Path | None
         if target == "outputs":
             path = self.output_dir
+        elif target == "config":
+            path = self.config_service.config_dir
         elif target == "history":
             self._refresh_history_paths()
             path = self._history_paths.get(record_id)
@@ -198,12 +310,18 @@ class StudioBridge(QObject):
         return self._json(self._response(ok=opened, code="open_failed" if not opened else None))
 
     def _handle_event(self, event: dict[str, Any]) -> None:
-        self._events.append(dict(event))
-        event_type = str(event.get("type", ""))
+        public_event = dict(event)
+        output = str(public_event.pop("output", ""))
+        if output:
+            public_event["outputPreview"] = output[:240]
+        self._events.append(public_event)
+        event_type = str(public_event.get("type", ""))
         self._state["progress"] = progress_from_events(self._events, self._state["taskCount"])
-        self._state["activeAgent"] = str(event.get("agent") or event_label(event_type))
+        self._state["activeAgent"] = str(
+            public_event.get("task_name") or public_event.get("agent") or event_label(event_type)
+        )
         self._state["events"] = self._events[-50:]
-        self.eventReceived.emit(self._json(event))
+        self.eventReceived.emit(self._json(public_event))
         self._emit_state()
 
     def _handle_completed(self, result: object) -> None:
@@ -232,6 +350,18 @@ class StudioBridge(QObject):
         self.historyChanged.emit(self._json(self._history_items()))
         self.noticeRaised.emit(self._json({"kind": "error", "message": error}))
 
+    def _handle_cancelled(self, message: str) -> None:
+        self._state = {
+            **self._state,
+            "status": RunStatus.CANCELLED.value,
+            "progress": 0,
+            "activeAgent": "已取消",
+            "error": message,
+        }
+        self._emit_state()
+        self.historyChanged.emit(self._json(self._history_items()))
+        self.noticeRaised.emit(self._json({"kind": "warning", "message": message}))
+
     def _release_worker(self) -> None:
         if self._worker is not None:
             self._worker.deleteLater()
@@ -239,12 +369,15 @@ class StudioBridge(QObject):
 
     def _snapshot(self) -> dict[str, Any]:
         return {
+            "protocolVersion": PROTOCOL_VERSION,
             "models": list(self._registry.aliases),
             "defaultModel": self._registry.default_alias(),
             "apiKeyConfigured": {
                 alias: self._api_key_checker(self._registry.resolve(alias).crewai_model)
                 for alias in self._registry.aliases
             },
+            "configPath": str(self.config_service.config_dir),
+            "envFile": str(self.env_file),
             "config": self._config_snapshot(),
             "history": self._history_items(),
             "runState": self._state,
@@ -263,55 +396,19 @@ class StudioBridge(QObject):
 
     def _history_items(self) -> list[dict[str, Any]]:
         self._refresh_history_paths()
-        return [self._history_item(record_id, path) for record_id, path in self._history_paths.items()]
+        return [
+            HistoryService(path.parent).item_for_path(record_id, path)
+            for record_id, path in self._history_paths.items()
+        ]
 
     def _refresh_history_paths(self) -> None:
         paths: dict[str, Path] = {}
-        sources = (("current", self.output_dir), ("legacy", self.legacy_output_dir))
-        for prefix, root in sources:
+        for prefix, root in (("current", self.output_dir), ("legacy", self.legacy_output_dir)):
             if root is None:
                 continue
             for path in HistoryService(root).list_run_dirs():
                 paths[f"{prefix}:{path.name}"] = path
-        self._history_paths = dict(
-            sorted(paths.items(), key=lambda item: item[1].name, reverse=True)
-        )
-
-    def _history_item(self, record_id: str, path: Path) -> dict[str, Any]:
-        model_alias = "-"
-        elapsed_seconds: float | None = None
-        status = "succeeded"
-        events_file = path / "events.json"
-        if events_file.exists():
-            try:
-                events = json.loads(events_file.read_text(encoding="utf-8"))
-                for event in events:
-                    if event.get("type") == "run_started":
-                        model_alias = str(event.get("model", model_alias))
-                    if event.get("type") in {"run_completed", "run_failed"}:
-                        status = "failed" if event.get("type") == "run_failed" else "succeeded"
-                        if event.get("elapsed_seconds") is not None:
-                            elapsed_seconds = float(event["elapsed_seconds"])
-            except (OSError, ValueError, TypeError):
-                pass
-        metadata = path / "run_metadata.md"
-        if metadata.exists() and (model_alias == "-" or elapsed_seconds is None):
-            text = metadata.read_text(encoding="utf-8", errors="ignore")
-            model_match = re.search(r"模型档位[：:]\s*([^\n]+)", text)
-            elapsed_match = re.search(r"总用时[：:]\s*([0-9.]+)", text)
-            if model_match:
-                model_alias = model_match.group(1).strip()
-            if elapsed_match:
-                elapsed_seconds = float(elapsed_match.group(1))
-            if re.search(r"status[：:]\s*failed", text, flags=re.IGNORECASE):
-                status = "failed"
-        return {
-            "id": record_id,
-            "createdAt": path.name,
-            "modelAlias": model_alias,
-            "elapsedSeconds": elapsed_seconds,
-            "status": status,
-        }
+        self._history_paths = dict(sorted(paths.items(), key=lambda item: item[1].name, reverse=True))
 
     def _id_for_path(self, path: Path) -> str:
         self._refresh_history_paths()
@@ -324,6 +421,7 @@ class StudioBridge(QObject):
     def _empty_state() -> dict[str, Any]:
         return {
             "status": RunStatus.IDLE.value,
+            "runId": "",
             "progress": 0,
             "modelAlias": MODEL_REGISTRY.default_alias(),
             "topic": "",

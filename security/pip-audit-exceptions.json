@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "id": "PYSEC-2026-311",
+      "expires": "2026-08-15",
+      "scope": "chromadb",
+      "rationale": "CrewAI installs ChromaDB, but Multiagent Studio explicitly disables CrewAI memory and knowledge, never starts the ChromaDB FastAPI server, and excludes chromadb from desktop bundles. Remove this exception when an unaffected ChromaDB release is available in the CrewAI dependency range."
+    }
+  ]
+}

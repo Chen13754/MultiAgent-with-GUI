@@ -85,3 +85,16 @@ def test_run_workflow_emits_failure_when_crew_build_fails(tmp_path, monkeypatch)
     run_dir = failed_run_dirs[0]
     assert "crew unavailable" in (run_dir / "summary_report.md").read_text(encoding="utf-8")
     assert '"type": "run_failed"' in (run_dir / "events.json").read_text(encoding="utf-8")
+    manifest = __import__("json").loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["run_id"]
+    assert "crew unavailable" in manifest["error"]
+
+
+def test_select_reports_uses_explicit_artifact_roles() -> None:
+    outputs = [
+        {"task_id": "custom-a", "artifact_role": "summary", "output": "short"},
+        {"task_id": "custom-b", "artifact_role": "full_report", "output": "long"},
+    ]
+
+    assert runner.select_reports(object(), outputs) == ("long", "short")

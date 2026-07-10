@@ -9,6 +9,7 @@ class RunStatus(str, Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 RUN_LOCK_REASON = "工作流正在运行，完成后可切换页面或修改配置。"
@@ -27,6 +28,7 @@ def status_label(status: object) -> str:
         RunStatus.RUNNING: "运行中",
         RunStatus.SUCCEEDED: "已完成",
         RunStatus.FAILED: "失败",
+        RunStatus.CANCELLED: "已取消",
     }
     return labels[normalize_status(status)]
 
@@ -37,6 +39,8 @@ def event_label(event_type: str) -> str:
         "task_completed": "任务完成",
         "run_completed": "运行完成",
         "run_failed": "运行失败",
+        "run_cancelled": "运行取消",
+        "run_timeout": "运行超时",
     }
     return labels.get(event_type, event_type)
 

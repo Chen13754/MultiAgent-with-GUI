@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
@@ -71,9 +71,5 @@ class StudioWebWindow(QMainWindow):
 
     def closeEvent(self, event: Any) -> None:  # noqa: N802 - Qt override.
         if self.bridge.is_running():
-            event.ignore()
-            self.bridge.noticeRaised.emit(
-                '{"kind":"warning","message":"工作流正在运行，请完成后再关闭窗口。"}'
-            )
-            return
+            self.bridge.shutdown()
         event.accept()

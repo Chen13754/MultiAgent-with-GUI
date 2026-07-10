@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $Main = Join-Path $ProjectRoot "src\main.py"
-$GuiApp = Join-Path $ProjectRoot "src\gui_app.py"
+$GuiApp = Join-Path $ProjectRoot "src\web_gui_app.py"
 $EnvFile = Join-Path $ProjectRoot ".env"
 
 if (-not (Test-Path $Python)) {

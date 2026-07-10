@@ -74,8 +74,10 @@ def test_config_editor_service_saves_json_documents_as_one_validated_bundle(tmp_
 
     service.save_config_payloads(agents, tasks)
 
-    assert json.loads((tmp_path / "agents.json").read_text(encoding="utf-8"))[0]["id"] == "new_agent"
-    assert json.loads((tmp_path / "tasks.json").read_text(encoding="utf-8"))[0]["agent_id"] == "new_agent"
+    workflow = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert workflow["schema_version"] == 1
+    assert workflow["agents"][0]["id"] == "new_agent"
+    assert workflow["tasks"][0]["agent_id"] == "new_agent"
 
 
 def test_history_service_lists_runs_and_reads_missing_files(tmp_path) -> None:
@@ -91,3 +93,26 @@ def test_history_service_lists_runs_and_reads_missing_files(tmp_path) -> None:
     selection = service.load_selection(new)
     assert selection.summary == "summary"
     assert selection.full_report == "无"
+
+
+def test_history_service_prefers_versioned_manifest(tmp_path) -> None:
+    run = tmp_path / "20260102_120000_deadbeef"
+    run.mkdir()
+    (run / "run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": "deadbeef",
+                "status": "cancelled",
+                "model_alias": "pro",
+                "elapsed_seconds": 2.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    item = HistoryService(tmp_path).item_for_path("current:test", run)
+
+    assert item["runId"] == "deadbeef"
+    assert item["status"] == "cancelled"
+    assert item["modelAlias"] == "pro"

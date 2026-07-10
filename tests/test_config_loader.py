@@ -91,3 +91,20 @@ def test_loader_reports_json_error(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="JSON 格式错误"):
         ConfigLoader(tmp_path).load_agents()
+
+
+def test_loader_migrates_legacy_files_to_versioned_workflow(tmp_path) -> None:
+    write_config(
+        tmp_path,
+        [{"id": "agent", "role": "Role", "goal": "Goal", "backstory": "Backstory"}],
+        [{"id": "review", "description": "Review", "expected_output": "Report", "agent_id": "agent"}],
+    )
+    loader = ConfigLoader(tmp_path)
+
+    loader.migrate_legacy_config()
+
+    document = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
+    assert document["schema_version"] == 1
+    assert document["tasks"][0]["artifact_role"] == "full_report"
+    assert (tmp_path / "agents.json.legacy.bak").exists()
+    assert (tmp_path / "tasks.json.legacy.bak").exists()

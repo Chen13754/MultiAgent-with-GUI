@@ -30,7 +30,8 @@ const statusLabels: Record<RunState["status"], string> = {
   idle: "待运行",
   running: "运行中",
   succeeded: "已完成",
-  failed: "运行失败"
+  failed: "运行失败",
+  cancelled: "已取消"
 };
 
 function formatSeconds(value: number | null | undefined): string {
@@ -59,6 +60,9 @@ function normaliseTasks(value: unknown): TaskConfig[] {
       context_task_ids: Array.isArray(context)
         ? context.map(String).filter(Boolean)
         : String(context ?? "").split(",").map((part) => part.trim()).filter(Boolean),
+      artifact_role: (["none", "full_report", "summary"].includes(String(task.artifact_role))
+        ? String(task.artifact_role)
+        : "none") as TaskConfig["artifact_role"],
       enabled: task.enabled !== false
     };
   });
@@ -83,26 +87,31 @@ function SectionHeading({ kicker, title, detail, action }: { kicker?: string; ti
   </div>;
 }
 
-function WorkflowGraph({ state }: { state: RunState }) {
-  const stages = ["分析", "策略", "评审", "总结"];
-  const completed = state.events.filter((event) => event.type === "task_completed").length;
-  const nodes = useMemo<Node[]>(() => stages.map((label, index) => {
-    const done = state.status === "succeeded" || index < completed;
-    const active = state.status === "running" && index === Math.min(completed, stages.length - 1);
+function WorkflowGraph({ state, tasks }: { state: RunState; tasks: TaskConfig[] }) {
+  const stages = tasks.filter((task) => task.enabled);
+  const completedIds = new Set(state.events.filter((event) => event.type === "task_completed").map((event) => String(event.task_id ?? "")));
+  const activeTaskId = String([...state.events].reverse().find((event) => event.type === "task_completed")?.task_id ?? stages[0]?.id ?? "");
+  const nodes = useMemo<Node[]>(() => stages.map((task, index) => {
+    const done = state.status === "succeeded" || completedIds.has(task.id);
+    const nextIncomplete = stages.find((candidate) => !completedIds.has(candidate.id))?.id;
+    const active = state.status === "running" && (nextIncomplete ? task.id === nextIncomplete : task.id === activeTaskId);
+    const columns = Math.min(4, Math.max(1, stages.length));
     return {
-      id: label,
-      position: [{ x: 30, y: 150 }, { x: 190, y: 50 }, { x: 370, y: 95 }, { x: 535, y: 180 }][index],
-      data: { label: `${done ? "✓ " : active ? "• " : ""}${label}` },
+      id: task.id,
+      position: { x: 35 + (index % columns) * 165, y: 45 + Math.floor(index / columns) * 115 },
+      data: { label: `${done ? "✓ " : active ? "• " : ""}${task.name}` },
       className: `flow-node ${done ? "is-done" : ""} ${active ? "is-active" : ""}`
     };
-  }), [completed, state.status]);
-  const edges = useMemo<Edge[]>(() => stages.slice(0, -1).map((label, index) => ({
-    id: `${label}-${stages[index + 1]}`,
-    source: label,
-    target: stages[index + 1],
+  }), [activeTaskId, completedIds, stages, state.status]);
+  const edges = useMemo<Edge[]>(() => stages.flatMap((task) => task.context_task_ids
+    .filter((dependency) => stages.some((candidate) => candidate.id === dependency))
+    .map((dependency) => ({
+    id: `${dependency}-${task.id}`,
+    source: dependency,
+    target: task.id,
     animated: state.status === "running",
     className: state.status === "failed" ? "is-failed" : ""
-  })), [state.status]);
+  }))), [stages, state.status]);
 
   return <div className="flow-shell" aria-label="多 Agent 编排流程">
     <ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.22 }} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} panOnDrag={false} zoomOnScroll={false} zoomOnPinch={false} zoomOnDoubleClick={false} proOptions={{ hideAttribution: true }}>
@@ -133,6 +142,10 @@ function RunPage({ snapshot, state, bridge, onNotice }: { snapshot: AppSnapshot;
     const response = await bridge.resetRun();
     if (!response.ok) onNotice({ kind: "warning", message: response.message ?? "当前不能重置。" });
   };
+  const cancel = async () => {
+    const response = await bridge.cancelRun();
+    if (!response.ok) onNotice({ kind: "warning", message: response.message ?? "无法取消当前运行。" });
+  };
 
   return <motion.main key="run" className="page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
     <SectionHeading kicker="ORCHESTRATION" title="让多 Agent 协作变得可见" detail="输入主题，实时观察编排、事件和最终报告。" action={<button className="button ghost" onClick={() => void bridge.openLocation("outputs")}><FolderOpen size={17} /> 打开输出目录</button>} />
@@ -149,11 +162,12 @@ function RunPage({ snapshot, state, bridge, onNotice }: { snapshot: AppSnapshot;
         <label>任务主题<textarea value={topic} disabled={running} onChange={(event) => setTopic(event.target.value)} rows={7} /></label>
         <div className="api-note"><Cpu size={16} /> API key 仅由本地 Python 读取，不会发送到界面。</div>
         <button className={`button primary ${running ? "is-running" : ""}`} disabled={running} onClick={() => void run()}>{running ? <LoaderCircle className="spin" size={18} /> : <Play size={18} />}{running ? "工作流运行中" : "运行工作流"}</button>
-        <button className="button secondary" disabled={running && state.progress > 0} onClick={() => void reset()}><RefreshCw size={17} /> 重置本次工作区</button>
+        {running && <button className="button danger" onClick={() => void cancel()}><AlertTriangle size={17} /> 取消运行</button>}
+        <button className="button secondary" disabled={running} onClick={() => void reset()}><RefreshCw size={17} /> 重置本次工作区</button>
       </div>
       <div className="panel orchestration-panel">
         <div className="panel-head"><div><span className="eyebrow">LIVE FLOW</span><h3>实时编排</h3></div><span className={statusClass(state.status)}>{statusLabels[state.status]}</span></div>
-        <WorkflowGraph state={state} />
+        <WorkflowGraph state={state} tasks={snapshot.config.tasks} />
         <div className="progress-wrap"><div className="progress-label"><span>{state.activeAgent}</span><strong>{state.progress}%</strong></div><div className="progress-track"><motion.div className="progress-value" animate={{ width: `${state.progress}%` }} /></div></div>
       </div>
       <div className="panel events-panel">
@@ -181,7 +195,7 @@ function AgentTable({ rows, onChange }: { rows: AgentConfig[]; onChange: (rows: 
 
 function TaskTable({ rows, agents, onChange }: { rows: TaskConfig[]; agents: AgentConfig[]; onChange: (rows: TaskConfig[]) => void }) {
   const update = (index: number, key: keyof TaskConfig, value: string | boolean | string[]) => onChange(rows.map((row, current) => current === index ? { ...row, [key]: value } : row));
-  return <div className="table-scroll"><table><thead><tr><th>ID</th><th>名称</th><th>说明</th><th>预期输出</th><th>Agent</th><th>上下文任务</th><th>启用</th><th /></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id}-${index}`}><td><input value={row.id} onChange={(event) => update(index, "id", event.target.value)} /></td><td><input value={row.name} onChange={(event) => update(index, "name", event.target.value)} /></td><td><input value={row.description} onChange={(event) => update(index, "description", event.target.value)} /></td><td><input value={row.expected_output} onChange={(event) => update(index, "expected_output", event.target.value)} /></td><td><select value={row.agent_id} onChange={(event) => update(index, "agent_id", event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.id}</option>)}</select></td><td><input value={row.context_task_ids.join(", ")} onChange={(event) => update(index, "context_task_ids", event.target.value.split(",").map((part) => part.trim()).filter(Boolean))} /></td><td><input className="toggle" aria-label={`${row.id} enabled`} type="checkbox" checked={row.enabled} onChange={(event) => update(index, "enabled", event.target.checked)} /></td><td><button className="icon-button" aria-label="删除 Task" onClick={() => onChange(rows.filter((_, current) => current !== index))}><Trash2 size={16} /></button></td></tr>)}</tbody></table></div>;
+  return <div className="table-scroll"><table><thead><tr><th>ID</th><th>名称</th><th>说明</th><th>预期输出</th><th>Agent</th><th>上下文任务</th><th>产物角色</th><th>启用</th><th /></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.id}-${index}`}><td><input value={row.id} onChange={(event) => update(index, "id", event.target.value)} /></td><td><input value={row.name} onChange={(event) => update(index, "name", event.target.value)} /></td><td><input value={row.description} onChange={(event) => update(index, "description", event.target.value)} /></td><td><input value={row.expected_output} onChange={(event) => update(index, "expected_output", event.target.value)} /></td><td><select value={row.agent_id} onChange={(event) => update(index, "agent_id", event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.id}</option>)}</select></td><td><input value={row.context_task_ids.join(", ")} onChange={(event) => update(index, "context_task_ids", event.target.value.split(",").map((part) => part.trim()).filter(Boolean))} /></td><td><select value={row.artifact_role} onChange={(event) => update(index, "artifact_role", event.target.value)}><option value="none">普通输出</option><option value="full_report">完整报告</option><option value="summary">精简报告</option></select></td><td><input className="toggle" aria-label={`${row.id} enabled`} type="checkbox" checked={row.enabled} onChange={(event) => update(index, "enabled", event.target.checked)} /></td><td><button className="icon-button" aria-label="删除 Task" onClick={() => onChange(rows.filter((_, current) => current !== index))}><Trash2 size={16} /></button></td></tr>)}</tbody></table></div>;
 }
 
 function ConfigPage({ snapshot, state, bridge, onConfig, onNotice }: { snapshot: AppSnapshot; state: RunState; bridge: StudioBridge; onConfig: (config: ConfigSnapshot) => void; onNotice: (notice: Notice) => void }) {
@@ -191,6 +205,7 @@ function ConfigPage({ snapshot, state, bridge, onConfig, onNotice }: { snapshot:
   const [agentsJson, setAgentsJson] = useState(snapshot.config.agentsJson);
   const [tasksJson, setTasksJson] = useState(snapshot.config.tasksJson);
   const [validation, setValidation] = useState(snapshot.config.validationText);
+  const [apiKey, setApiKey] = useState("");
   const locked = state.status === "running";
 
   useEffect(() => { setAgents(cloneAgents(snapshot.config.agents)); setTasks(cloneTasks(snapshot.config.tasks)); setAgentsJson(snapshot.config.agentsJson); setTasksJson(snapshot.config.tasksJson); setValidation(snapshot.config.validationText); }, [snapshot.config]);
@@ -210,13 +225,16 @@ function ConfigPage({ snapshot, state, bridge, onConfig, onNotice }: { snapshot:
     } catch (error) { onNotice({ kind: "error", message: error instanceof Error ? error.message : "JSON 格式错误。" }); }
   };
   const validate = async () => { const response = await bridge.validateConfig(); if (response.ok && response.data) { setValidation(response.data.text); onNotice({ kind: "success", message: "配置检查通过。" }); } else onNotice({ kind: "error", message: response.message ?? "配置检查失败。" }); };
+  const saveKey = async () => { const response = await bridge.saveApiKey(apiKey); if (response.ok) { setApiKey(""); onNotice({ kind: "success", message: "API key 已保存到本地配置。" }); } else onNotice({ kind: "error", message: response.message ?? "API key 保存失败。" }); };
+  const exportDiagnostics = async () => { const response = await bridge.exportDiagnostics(); if (response.ok) onNotice({ kind: "success", message: "诊断包已生成。" }); else onNotice({ kind: "error", message: response.message ?? "诊断包生成失败。" }); };
 
   return <motion.main key="config" className="page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
     <SectionHeading kicker="CONFIGURATION" title="配置中心" detail="编辑 Agents、Tasks 和原始 JSON；保存前由 Python 验证实际工作流配置。" />
+    <section className="panel credential-panel"><div><strong>本地凭据</strong><small>配置文件：{snapshot.envFile}</small></div><input aria-label="DeepSeek API key" type="password" value={apiKey} placeholder="输入新的 DeepSeek API key" disabled={locked} onChange={(event) => setApiKey(event.target.value)} /><button className="button primary" disabled={locked || apiKey.trim().length < 8} onClick={() => void saveKey()}>保存 API key</button><button className="button ghost" onClick={() => void bridge.openLocation("config")}><FolderOpen size={16} /> 配置目录</button><button className="button ghost" onClick={() => void exportDiagnostics()}><FileText size={16} /> 导出诊断</button></section>
     <section className="metrics-row compact"><Metric label="Agents" value={`${agents.length}`} /><Metric label="Tasks" value={`${tasks.length}`} /><Metric label="启用任务" value={`${tasks.filter((task) => task.enabled).length}`} /><Metric label="当前状态" value={locked ? "运行中已锁定" : "可编辑"} tone={locked ? "running" : "succeeded"} /></section>
     <section className="panel config-workspace"><div className="tabs" role="tablist">{(["agents", "tasks", "json", "validation"] as ConfigTab[]).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)} role="tab">{{ agents: "Agents", tasks: "Tasks", json: "JSON 高级编辑", validation: "配置检查" }[item]}</button>)}</div>
       {tab === "agents" && <><AgentTable rows={agents} onChange={setAgents} /><div className="sticky-actions"><button className="button secondary" disabled={locked} onClick={() => setAgents([...agents, { id: "new_agent", role: "新角色", goal: "", backstory: "", enabled: true }])}><Plus size={17} /> 新增 Agent</button><button className="button primary" disabled={locked} onClick={() => void save("agents", agents)}><Save size={17} /> 保存 Agents</button></div></>}
-      {tab === "tasks" && <><TaskTable rows={tasks} agents={agents} onChange={setTasks} /><div className="sticky-actions"><button className="button secondary" disabled={locked} onClick={() => setTasks([...tasks, { id: "new_task", name: "新任务", description: "", expected_output: "", agent_id: agents[0]?.id ?? "", context_task_ids: [], enabled: true }])}><Plus size={17} /> 新增 Task</button><button className="button primary" disabled={locked} onClick={() => void save("tasks", tasks)}><Save size={17} /> 保存 Tasks</button></div></>}
+      {tab === "tasks" && <><TaskTable rows={tasks} agents={agents} onChange={setTasks} /><div className="sticky-actions"><button className="button secondary" disabled={locked} onClick={() => setTasks([...tasks, { id: "new_task", name: "新任务", description: "", expected_output: "", agent_id: agents[0]?.id ?? "", context_task_ids: [], artifact_role: "none", enabled: true }])}><Plus size={17} /> 新增 Task</button><button className="button primary" disabled={locked} onClick={() => void save("tasks", tasks)}><Save size={17} /> 保存 Tasks</button></div></>}
       {tab === "json" && <><div className="json-grid"><label>Agents JSON<textarea className="code-editor" disabled={locked} value={agentsJson} onChange={(event) => setAgentsJson(event.target.value)} /></label><label>Tasks JSON<textarea className="code-editor" disabled={locked} value={tasksJson} onChange={(event) => setTasksJson(event.target.value)} /></label></div><div className="sticky-actions"><button className="button secondary" disabled={locked} onClick={() => { setAgentsJson(snapshot.config.agentsJson); setTasksJson(snapshot.config.tasksJson); }}><RefreshCw size={17} /> 重新读取</button><button className="button primary" disabled={locked} onClick={() => void saveJson()}><Save size={17} /> 保存 JSON</button></div></>}
       {tab === "validation" && <div className="validation-panel"><div><CheckCircle2 size={24} /><h3>配置检查</h3><p>校验启用 Agent、任务依赖和字段完整性。</p></div><button className="button primary" disabled={locked} onClick={() => void validate()}>立即检查</button><pre>{validation}</pre></div>}
     </section>
@@ -231,7 +249,7 @@ function HistoryPage({ snapshot, bridge, onNotice }: { snapshot: AppSnapshot; br
   const load = async (id: string) => { const response = await bridge.loadHistory(id); if (response.ok && response.data) setDetail(response.data); else onNotice({ kind: "error", message: response.message ?? "读取历史记录失败。" }); };
   return <motion.main key="history" className="page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
     <SectionHeading kicker="RUN HISTORY" title="历史输出" detail="回看已归档的报告、元数据和模型运行信息。" action={<button className="button ghost" onClick={() => void bridge.openLocation("outputs")}><FolderOpen size={17} /> 输出目录</button>} />
-    <section className="history-layout"><aside className="panel history-list"><div className="panel-head"><h3>运行记录</h3><span>{snapshot.history.length}</span></div>{snapshot.history.length === 0 && <div className="empty-state">还没有历史运行。</div>}<div className="history-items">{snapshot.history.map((item) => <button key={item.id} className={item.id === selected ? "history-item active" : "history-item"} onClick={() => setSelected(item.id)}><span className={statusClass(item.status)}>{item.status === "failed" ? "失败" : "完成"}</span><strong>{item.createdAt}</strong><small>{item.modelAlias} · {formatSeconds(item.elapsedSeconds)}</small></button>)}</div></aside>
+    <section className="history-layout"><aside className="panel history-list"><div className="panel-head"><h3>运行记录</h3><span>{snapshot.history.length}</span></div>{snapshot.history.length === 0 && <div className="empty-state">还没有历史运行。</div>}<div className="history-items">{snapshot.history.map((item) => <button key={item.id} className={item.id === selected ? "history-item active" : "history-item"} onClick={() => setSelected(item.id)}><span className={statusClass(item.status)}>{{ succeeded: "完成", failed: "失败", cancelled: "取消", interrupted: "中断" }[item.status]}</span><strong>{item.createdAt}</strong><small>{item.modelAlias} · {formatSeconds(item.elapsedSeconds)}</small></button>)}</div></aside>
       <article className="panel history-detail"><div className="panel-head"><div><span className="eyebrow">REPORT DETAIL</span><h3>报告详情</h3></div>{selected && <button className="button ghost" onClick={() => void bridge.openLocation("history", selected)}><FolderOpen size={16} /> 打开目录</button>}</div><div className="tabs compact" role="tablist">{(["summary", "full", "metadata"] as const).map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{({ summary: "精简报告", full: "完整报告", metadata: "元数据" })[item]}</button>)}</div><div className="markdown report-content">{detail ? tab === "metadata" ? <pre>{detail.metadata}</pre> : <ReactMarkdown>{tab === "summary" ? detail.summary : detail.fullReport}</ReactMarkdown> : <div className="empty-state">选择一条运行记录查看内容。</div>}</div></article>
     </section>
   </motion.main>;
@@ -243,13 +261,16 @@ export default function App() {
   const [runState, setRunState] = useState<RunState | null>(null);
   const [page, setPage] = useState<Page>("run");
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
 
   useEffect(() => {
     let dispose: () => void = () => {};
     void getBridge().then(async (nextBridge) => {
       const response = await nextBridge.bootstrap();
-      if (!response.ok || !response.data) { setNotice({ kind: "error", message: response.message ?? "无法初始化界面。" }); return; }
+      setBridge(nextBridge);
+      if (!response.ok || !response.data) { setInitializationError(response.message ?? "无法初始化界面。"); return; }
       setBridge(nextBridge); setSnapshot(response.data); setRunState(response.data.runState);
+      document.documentElement.dataset.studioProtocol = String(response.data.protocolVersion);
       const unsubscribers = [
         nextBridge.onRunState(setRunState),
         nextBridge.onHistory((history) => setSnapshot((current) => current ? { ...current, history } : current)),
@@ -263,8 +284,17 @@ export default function App() {
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(null), 4200); return () => window.clearTimeout(timer); }, [notice]);
   const applyConfig = (config: ConfigSnapshot) => setSnapshot((current) => current ? { ...current, config } : current);
 
+  const recoverConfig = async () => {
+    if (!bridge) return;
+    const response = await bridge.resetConfig();
+    if (!response.ok || !response.data) { setInitializationError(response.message ?? "默认配置恢复失败。"); return; }
+    setSnapshot(response.data); setRunState(response.data.runState); setInitializationError(null);
+    document.documentElement.dataset.studioProtocol = String(response.data.protocolVersion);
+  };
+
+  if (initializationError && bridge) return <div className="recovery-screen"><AlertTriangle size={32} /><h1>工作台初始化失败</h1><p>{initializationError}</p><div><button className="button ghost" onClick={() => void bridge.openLocation("config")}><FolderOpen size={16} /> 打开配置目录</button><button className="button primary" onClick={() => void recoverConfig()}><RefreshCw size={16} /> 恢复默认配置</button></div></div>;
   if (!snapshot || !runState || !bridge) return <div className="loading-screen"><LoaderCircle className="spin" size={28} /><span>正在连接本地工作台…</span></div>;
   const navigation = [{ id: "run" as const, label: "工作台", icon: LayoutDashboard }, { id: "config" as const, label: "配置中心", icon: Settings2 }, { id: "history" as const, label: "历史输出", icon: History }];
 
-  return <MotionConfig reducedMotion="user" transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}><div className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark"><Sparkles size={18} /></span><div><strong>Multiagent</strong><small>STUDIO</small></div></div><nav>{navigation.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)} disabled={false}><Icon size={19} /><span>{item.label}</span></button>; })}</nav><div className="sidebar-foot"><span className={statusClass(runState.status)}>{statusLabels[runState.status]}</span><small>本地工作流 · 离线界面</small></div></aside><div className="app-content"><AnimatePresence mode="wait">{page === "run" && <RunPage snapshot={snapshot} state={runState} bridge={bridge} onNotice={setNotice} />}{page === "config" && <ConfigPage snapshot={snapshot} state={runState} bridge={bridge} onConfig={applyConfig} onNotice={setNotice} />}{page === "history" && <HistoryPage snapshot={snapshot} bridge={bridge} onNotice={setNotice} />}</AnimatePresence></div><AnimatePresence>{notice && <motion.div className={`toast toast-${notice.kind}`} role="status" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}>{notice.kind === "error" || notice.kind === "warning" ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}<span>{notice.message}</span></motion.div>}</AnimatePresence></div></MotionConfig>;
+  return <MotionConfig reducedMotion="user" transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}><div className="app-shell"><aside className="sidebar"><div className="brand"><span className="brand-mark"><Sparkles size={18} /></span><div><strong>Multiagent</strong><small>STUDIO</small></div></div><nav>{navigation.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)} disabled={false}><Icon size={19} /><span>{item.label}</span></button>; })}</nav><div className="sidebar-foot"><span className={statusClass(runState.status)}>{statusLabels[runState.status]}</span><small>协议 v{snapshot.protocolVersion} · 本地工作流</small></div></aside><div className="app-content"><AnimatePresence mode="wait">{page === "run" && <RunPage snapshot={snapshot} state={runState} bridge={bridge} onNotice={setNotice} />}{page === "config" && <ConfigPage snapshot={snapshot} state={runState} bridge={bridge} onConfig={applyConfig} onNotice={setNotice} />}{page === "history" && <HistoryPage snapshot={snapshot} bridge={bridge} onNotice={setNotice} />}</AnimatePresence></div><AnimatePresence>{notice && <motion.div className={`toast toast-${notice.kind}`} role="status" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}>{notice.kind === "error" || notice.kind === "warning" ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}<span>{notice.message}</span></motion.div>}</AnimatePresence></div></MotionConfig>;
 }

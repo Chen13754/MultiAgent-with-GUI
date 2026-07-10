@@ -12,6 +12,8 @@ describe("development bridge", () => {
     expect(snapshot.data?.config.tasks[0].agent_id).toBe("problem_analyst");
 
     const started = await bridge.startRun("测试主题", "flash");
-    expect(started).toEqual({ ok: true, data: { accepted: true } });
+    expect(started.ok).toBe(true);
+    expect(started.data?.accepted).toBe(true);
+    expect(started.data?.runId).toMatch(/^demo-/);
   });
 });

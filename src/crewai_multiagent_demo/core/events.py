@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import json
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from crewai_multiagent_demo.utils.files import atomic_write_json
 
 EventCallback = Callable[[dict[str, Any]], None]
+LOGGER = logging.getLogger(__name__)
 
 
 class EventEmitter:
@@ -23,11 +25,13 @@ class EventEmitter:
         }
         self.events.append(event)
         if self.callback is not None:
-            self.callback(event)
+            try:
+                self.callback(event)
+            except Exception:
+                # UI/observer failures must never convert a successful model run
+                # into a failed workflow.
+                LOGGER.exception("Run event callback failed")
 
 
 def write_event_log(run_dir: Path, events: list[dict[str, Any]]) -> None:
-    (run_dir / "events.json").write_text(
-        json.dumps(events, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_json(run_dir / "events.json", events)

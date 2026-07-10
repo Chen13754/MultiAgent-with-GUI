@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
 from crewai_multiagent_demo.utils.paths import (
+    APP_HOME,
     DEFAULT_CACHE_DIR,
     DEFAULT_ENV_FILE,
     IS_FROZEN,
@@ -14,25 +16,43 @@ from crewai_multiagent_demo.utils.paths import (
     PROJECT_ROOT,
 )
 
-
 LAST_ENV_FILE: Path | None = None
 
 
+def _resolve_runtime_path(value: str | None, default: Path, *, base: Path = PROJECT_ROOT) -> Path:
+    if not value:
+        return default.resolve()
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (base / candidate).resolve()
+
+
 def configure_runtime_environment(project_root: Path | None = None) -> None:
-    """Keep CrewAI and telemetry runtime files inside the project."""
+    """Keep CrewAI, telemetry, and temporary runtime files in a writable workspace."""
+
     env_project_root = os.getenv("MULTIAGENT_PROJECT_ROOT")
     if project_root is None and env_project_root:
         project_root = Path(env_project_root)
     root_cache = (project_root / ".cache") if project_root else DEFAULT_CACHE_DIR
-    crewai_storage = root_cache / "crewai"
+    root_cache = root_cache.expanduser().resolve()
+    crewai_storage = _resolve_runtime_path(
+        os.getenv("CREWAI_STORAGE_DIR"),
+        root_cache / "crewai",
+        base=(project_root or APP_HOME).expanduser().resolve(),
+    )
     local_app_data = root_cache / "localappdata"
+    crewai_storage.mkdir(parents=True, exist_ok=True)
+    local_app_data.mkdir(parents=True, exist_ok=True)
 
-    os.environ.setdefault("CREWAI_STORAGE_DIR", str(crewai_storage))
+    # CrewAI 1.x expects CREWAI_STORAGE_DIR to be an absolute directory. Always
+    # normalize after loading .env so appdirs cannot reinterpret a relative path.
+    os.environ["CREWAI_STORAGE_DIR"] = str(crewai_storage)
     os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
     os.environ.setdefault("OTEL_SDK_DISABLED", "true")
     os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
     os.environ.setdefault("CREWAI_TESTING", "true")
-    os.environ["LOCALAPPDATA"] = str(local_app_data)
+    os.environ.setdefault("LOCALAPPDATA", str(local_app_data))
 
 
 def candidate_env_files(env_file: Path | None = None) -> list[Path]:
@@ -61,15 +81,18 @@ def candidate_env_files(env_file: Path | None = None) -> list[Path]:
 
 def load_project_env(env_file: Path | None = None) -> Path | None:
     global LAST_ENV_FILE
-    configure_runtime_environment()
     _configure_utf8_stdio()
+    loaded: Path | None = None
     for candidate in candidate_env_files(env_file):
         if candidate.exists():
-            load_dotenv(candidate, override=True)
-            LAST_ENV_FILE = candidate
-            return candidate
-    LAST_ENV_FILE = None
-    return None
+            # Process/managed-environment secrets take precedence over a local
+            # file. This also prevents a blank template value from clearing one.
+            load_dotenv(candidate, override=False)
+            loaded = candidate
+            break
+    LAST_ENV_FILE = loaded
+    configure_runtime_environment()
+    return loaded
 
 
 def loaded_env_file() -> Path | None:
@@ -78,7 +101,7 @@ def loaded_env_file() -> Path | None:
 
 def _configure_utf8_stdio() -> None:
     for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name, None)
+        stream: Any = getattr(sys, stream_name, None)
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
@@ -98,6 +121,7 @@ def has_api_key_for_model(crewai_model: str) -> bool:
 
 
 def require_api_key(crewai_model: str | None = None) -> None:
+    required_names: tuple[str, ...]
     if crewai_model is None:
         if has_api_key():
             return
