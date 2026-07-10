@@ -49,7 +49,7 @@ config/
 tests/
 ```
 
-`src/main.py` 和 `src/gui_app.py` 是入口；核心业务逻辑在 `crewai_multiagent_demo` 包内。架构分层、扩展点和验证命令见 `docs/ARCHITECTURE.md`。
+`src/main.py` 和 `src/web_gui_app.py` 是当前入口；`src/gui_app.py` 保留为旧 Qt Widgets 界面。核心业务逻辑在 `crewai_multiagent_demo` 包内。架构分层、扩展点和验证命令见 `docs/ARCHITECTURE.md`。
 
 ## 本地环境
 
@@ -136,21 +136,32 @@ OTEL_SDK_DISABLED=true
 
 ## 桌面 GUI
 
-桌面 GUI 的用户入口只保留 Windows 可执行文件。首次使用或代码更新后，先在项目目录内构建：
+新版桌面界面使用 `PySide6 Qt WebEngine` 承载本地 React 前端，不启动本地 Web
+服务，也不会把 API key 或任意本地路径暴露给界面。运行流程、配置 schema、CLI 及输出文件
+均沿用原有核心逻辑。
+
+源码开发时，前端依赖和缓存均保留在项目目录的 `frontend/node_modules/` 与 `.cache/` 中：
+
+```powershell
+corepack enable
+pnpm --dir frontend install --store-dir .\.cache\pnpm-store
+pnpm --dir frontend run build
+.\.venv\Scripts\python.exe .\src\web_gui_app.py
+```
+
+首次构建或代码更新后，运行：
 
 ```powershell
 .\build-gui.ps1
 ```
 
-构建完成后启动：
-
-```powershell
-.\MultiagentStudio.exe
-```
-
-桌面 GUI 支持运行工作流、查看事件和输出、编辑 `agents.json` / `tasks.json`、校验配置、查看历史输出。GUI 层只负责交互展示，实际运行调用 `core.runner.run_workflow`。
-
-`build-gui.ps1` 使用项目内 `.venv` 和 `.cache` 完成打包，避免污染全局 Python 环境。构建脚本会把 `MultiagentStudio.exe` 和运行依赖目录 `_internal/` 放到项目根目录；用户只需要启动 `MultiagentStudio.exe`。
+构建脚本会先生成前端资源，再产出当前系统的离线便携包。Windows 包位于
+`dist\MultiagentStudio\MultiagentStudio.exe`；Linux 和 macOS 分别生成对应的目录包与归档。
+可以先运行 `.\.venv\Scripts\python.exe .\scripts\build_gui.py --check` 检查本机打包前置条件，
+该命令不会生成或覆盖发行包。
+跨平台包由对应系统和架构上的 GitHub Actions 生成：Windows x64、Linux x64、macOS x64
+和 macOS arm64。冻结后的应用将配置、输出与缓存写入系统用户目录；首次启动会导入旧
+Windows 便携版旁置的配置，并继续读取旧 `.env` 以保证兼容。
 
 ## 配置 Agent 和 Task
 

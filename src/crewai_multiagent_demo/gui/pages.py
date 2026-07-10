@@ -1,18 +1,26 @@
+"""Page builders for the PySide6 desktop application."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QListWidget,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -24,337 +32,611 @@ from PySide6.QtWidgets import (
 
 from crewai_multiagent_demo.core.runner import DEFAULT_TOPIC
 from crewai_multiagent_demo.gui.widgets import (
+    AgentCreditCard,
     AnimatedAgentGraph,
     GlassPanel,
     MetricCard,
     MotionEventList,
+    PlataPanel,
+    PlataStatusBadge,
     PulseButton,
 )
 from crewai_multiagent_demo.llm.model_registry import MODEL_REGISTRY
 
 
-def make_card(object_name: str = "GlassPanel") -> QFrame:
-    return GlassPanel(object_name)
-
-
-def label(text: str, object_name: str | None = None) -> QLabel:
-    widget = QLabel(text)
-    widget.setWordWrap(True)
-    if object_name:
-        widget.setObjectName(object_name)
-    return widget
-
-
-def build_sidebar(controller: Any) -> QFrame:
-    sidebar = make_card("Sidebar")
-    sidebar.setFixedWidth(232)
+def build_sidebar(controller: Any) -> QWidget:
+    sidebar = QFrame()
+    sidebar.setObjectName("Sidebar")
+    sidebar.setFixedWidth(210)
     layout = QVBoxLayout(sidebar)
-    layout.setContentsMargins(18, 20, 18, 18)
-    layout.setSpacing(10)
+    layout.setContentsMargins(24, 26, 24, 22)
+    layout.setSpacing(18)
 
-    layout.addWidget(label("Multiagent Studio", "BrandTitle"))
-    layout.addWidget(label("多 Agent 工作流控制台", "Muted"))
-    layout.addSpacing(8)
+    brand = QLabel("MS")
+    brand.setObjectName("BrandPill")
+    brand.setFixedWidth(66)
+    layout.addWidget(brand, 0, Qt.AlignmentFlag.AlignLeft)
 
+    title = QLabel("Multiagent\nStudio")
+    title.setObjectName("SidebarTitle")
+    title.setWordWrap(True)
+    layout.addWidget(title)
+
+    subtitle = QLabel("多 Agent 工作流控制台")
+    subtitle.setObjectName("SidebarSubtitle")
+    subtitle.setWordWrap(True)
+    layout.addWidget(subtitle)
+
+    layout.addSpacing(20)
+    nav_group = QButtonGroup(sidebar)
+    nav_group.setExclusive(True)
     controller.nav_buttons = []
-    for index, name in enumerate(("运行", "配置", "历史")):
-        button = QPushButton(name)
+    nav_items = [
+        ("⌂", "运行"),
+        ("⚙", "配置"),
+        ("◷", "历史"),
+    ]
+    for index, (icon, text) in enumerate(nav_items):
+        button = QPushButton(f"{icon}  {text}")
         button.setObjectName("NavButton")
         button.setCheckable(True)
         button.clicked.connect(lambda checked=False, page=index: controller.switch_page(page))
-        layout.addWidget(button)
+        nav_group.addButton(button, index)
         controller.nav_buttons.append(button)
+        layout.addWidget(button)
     controller.nav_buttons[0].setChecked(True)
 
-    layout.addStretch(1)
-    controller.lock_hint = label("", "Muted")
-    layout.addWidget(controller.lock_hint)
+    layout.addStretch()
+    hint = PlataPanel()
+    hint.setObjectName("SidebarHint")
+    hint_layout = QVBoxLayout(hint)
+    hint_layout.setContentsMargins(16, 14, 16, 14)
+    hint_layout.setSpacing(6)
+    hint_title = QLabel("本地入口")
+    hint_title.setObjectName("SmallSectionTitle")
+    hint_body = QLabel("MultiagentStudio.exe")
+    hint_body.setObjectName("MutedText")
+    hint_body.setWordWrap(True)
+    controller.lock_hint = QLabel("")
+    controller.lock_hint.setObjectName("MutedText")
+    controller.lock_hint.setWordWrap(True)
+    hint_layout.addWidget(hint_title)
+    hint_layout.addWidget(hint_body)
+    hint_layout.addWidget(controller.lock_hint)
+    layout.addWidget(hint)
     return sidebar
 
 
 def build_run_page(controller: Any) -> QWidget:
+    page = _scroll_page()
+    content = page.widget()
+    layout = content.layout()
+
+    layout.addWidget(_build_run_hero(controller))
+
+    main = QWidget()
+    main_layout = QVBoxLayout(main)
+    main_layout.setContentsMargins(0, 0, 0, 0)
+    main_layout.setSpacing(14)
+
+    left = QWidget()
+    left_layout = QVBoxLayout(left)
+    left_layout.setContentsMargins(0, 0, 0, 0)
+    left_layout.setSpacing(16)
+    controller.workflow_card = AgentCreditCard()
+    left_layout.addWidget(controller.workflow_card)
+    left_layout.addWidget(_build_quick_actions(controller))
+    left_layout.addWidget(_build_run_controls(controller), 1)
+
+    right = QWidget()
+    right_layout = QVBoxLayout(right)
+    right_layout.setContentsMargins(0, 0, 0, 0)
+    right_layout.setSpacing(16)
+    right_layout.addWidget(_build_orchestration_panel(controller), 1)
+
+    main_layout.addWidget(left)
+    main_layout.addWidget(right, 1)
+    layout.addWidget(main)
+    layout.addWidget(_build_output_panel(controller))
+    layout.addStretch()
+    return page
+
+
+def build_config_page(controller: Any) -> QWidget:
+    page = _scroll_page()
+    content = page.widget()
+    layout = content.layout()
+
+    layout.addWidget(_build_page_header("配置中心", "编辑 agents/tasks，保存前自动校验配置。", "CONFIGURATION"))
+
+    summary = QWidget()
+    summary_layout = QHBoxLayout(summary)
+    summary_layout.setContentsMargins(0, 0, 0, 0)
+    summary_layout.setSpacing(14)
+    controller.agents_summary_value = QLabel("0")
+    controller.tasks_summary_value = QLabel("0")
+    controller.config_validation_badge = PlataStatusBadge("待检查", "neutral")
+    summary_layout.addWidget(_config_summary_card("Agents", controller.agents_summary_value, "启用状态与角色目标"))
+    summary_layout.addWidget(_config_summary_card("Tasks", controller.tasks_summary_value, "任务编排与上下文依赖"))
+    summary_layout.addWidget(_validation_summary_card(controller.config_validation_badge))
+    layout.addWidget(summary)
+
+    tabs = QTabWidget()
+    tabs.setObjectName("SegmentTabs")
+    controller.config_tabs = tabs
+    controller.agents_table = build_table(["id", "role", "goal", "backstory", "enabled"])
+    controller.tasks_table = build_table(
+        ["id", "description", "expected_output", "agent", "context", "enabled"]
+    )
+    tabs.addTab(_wrap_editor(controller.agents_table, controller, "agents"), "Agents")
+    tabs.addTab(_wrap_editor(controller.tasks_table, controller, "tasks"), "Tasks")
+
+    json_editor = QWidget()
+    json_layout = QHBoxLayout(json_editor)
+    json_layout.setContentsMargins(0, 0, 0, 0)
+    json_layout.setSpacing(14)
+    controller.agents_json = QPlainTextEdit()
+    controller.agents_json.setObjectName("JsonEditor")
+    controller.tasks_json = QPlainTextEdit()
+    controller.tasks_json.setObjectName("JsonEditor")
+    json_layout.addWidget(controller.agents_json)
+    json_layout.addWidget(controller.tasks_json)
+    tabs.addTab(json_editor, "JSON 高级编辑")
+
+    validation = PlataPanel()
+    validation.setObjectName("ValidationCard")
+    validation_layout = QVBoxLayout(validation)
+    validation_layout.setContentsMargins(20, 18, 20, 20)
+    validation_layout.setSpacing(14)
+    row = QHBoxLayout()
+    title = QLabel("配置检查")
+    title.setObjectName("SectionTitle")
+    validate_button = QPushButton("立即检查")
+    validate_button.setObjectName("LinkButton")
+    validate_button.clicked.connect(controller.validate_current_config)
+    row.addWidget(title)
+    row.addStretch()
+    row.addWidget(validate_button)
+    controller.validation_text = QTextBrowser()
+    controller.validation_text.setObjectName("ReportView")
+    controller.validation_text.setPlainText("尚未执行检查。")
+    validation_layout.addLayout(row)
+    validation_layout.addWidget(controller.validation_text)
+    tabs.addTab(validation, "配置检查")
+
+    layout.addWidget(tabs, 1)
+    layout.addStretch()
+    return page
+
+
+def build_history_page(controller: Any) -> QWidget:
+    page = _scroll_page()
+    content = page.widget()
+    layout = content.layout()
+
+    layout.addWidget(_build_page_header("历史输出", "按运行记录回看报告、元数据与输出文件。", "RUN HISTORY"))
+
+    split = QSplitter(Qt.Orientation.Horizontal)
+    split.setChildrenCollapsible(False)
+
+    list_card = PlataPanel()
+    list_card.setObjectName("HistoryListCard")
+    list_layout = QVBoxLayout(list_card)
+    list_layout.setContentsMargins(20, 18, 20, 20)
+    list_layout.setSpacing(12)
+    header = QLabel("Transactions")
+    header.setObjectName("SectionTitle")
+    controller.history_list = QListWidget()
+    controller.history_list.setObjectName("HistoryList")
+    controller.history_list.currentItemChanged.connect(controller.load_history_selection)
+    list_layout.addWidget(header)
+    list_layout.addWidget(controller.history_list, 1)
+
+    detail = PlataPanel()
+    detail.setObjectName("HistoryDetailCard")
+    detail_layout = QVBoxLayout(detail)
+    detail_layout.setContentsMargins(20, 18, 20, 20)
+    detail_layout.setSpacing(14)
+    detail_header = QHBoxLayout()
+    detail_title = QLabel("报告详情")
+    detail_title.setObjectName("SectionTitle")
+    open_button = QPushButton("打开目录")
+    open_button.setObjectName("LinkButton")
+    open_button.clicked.connect(controller.open_selected_history_dir)
+    detail_header.addWidget(detail_title)
+    detail_header.addStretch()
+    detail_header.addWidget(open_button)
+    controller.history_tabs = QTabWidget()
+    controller.history_tabs.setObjectName("SegmentTabs")
+    controller.history_summary = QTextBrowser()
+    controller.history_summary.setObjectName("ReportView")
+    controller.history_full = QTextBrowser()
+    controller.history_full.setObjectName("ReportView")
+    controller.history_metadata = QTextBrowser()
+    controller.history_metadata.setObjectName("ReportView")
+    controller.history_tabs.addTab(controller.history_summary, "精简报告")
+    controller.history_tabs.addTab(controller.history_full, "完整报告")
+    controller.history_tabs.addTab(controller.history_metadata, "元数据")
+    detail_layout.addLayout(detail_header)
+    detail_layout.addWidget(controller.history_tabs, 1)
+
+    split.addWidget(list_card)
+    split.addWidget(detail)
+    split.setSizes([330, 780])
+    layout.addWidget(split, 1)
+    layout.addStretch()
+    return page
+
+
+def populate_table(
+    table: QTableWidget, rows: list[dict[str, Any]], columns: list[str] | None = None
+) -> None:
+    if columns is None:
+        columns = [
+            table.horizontalHeaderItem(index).text()
+            for index in range(table.columnCount())
+            if table.horizontalHeaderItem(index)
+        ]
+    table.setRowCount(len(rows))
+    table.setColumnCount(len(columns))
+    table.setHorizontalHeaderLabels(columns)
+    for row_index, row_data in enumerate(rows):
+        for col_index, col_name in enumerate(columns):
+            value = row_data.get(col_name, "")
+            if isinstance(value, (list, dict)):
+                value = ", ".join(value) if isinstance(value, list) else str(value)
+            item = QTableWidgetItem(str(value))
+            table.setItem(row_index, col_index, item)
+        table.setRowHeight(row_index, 48)
+
+
+def table_rows(table: QTableWidget) -> list[dict[str, str]]:
+    columns = [
+        table.horizontalHeaderItem(index).text()
+        for index in range(table.columnCount())
+        if table.horizontalHeaderItem(index)
+    ]
+    rows: list[dict[str, str]] = []
+    for row in range(table.rowCount()):
+        payload: dict[str, str] = {}
+        has_value = False
+        for column, name in enumerate(columns):
+            item = table.item(row, column)
+            value = item.text().strip() if item else ""
+            if value:
+                has_value = True
+            payload[name] = value
+        if has_value:
+            rows.append(payload)
+    return rows
+
+
+def _scroll_page() -> QScrollArea:
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    page = QWidget()
-    scroll.setWidget(page)
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(24, 20, 24, 24)
-    layout.setSpacing(14)
-
-    header = make_card("CommandHeader")
-    header_layout = QHBoxLayout(header)
-    header_layout.setContentsMargins(18, 14, 18, 14)
-    header_layout.setSpacing(16)
-    title_box = QVBoxLayout()
-    title_box.setSpacing(3)
-    title_box.addWidget(label("MULTIAGENT STUDIO", "Kicker"))
-    title_box.addWidget(label("工作流控制台", "PageTitle"))
-    title_box.addWidget(label("输入主题，启动多 Agent 协作，并在实时编排视图中观察任务流转。", "Muted"))
-    header_layout.addLayout(title_box, 1)
-
-    controller.status_widgets = {}
-    for key, title in (("status", "状态"), ("model", "模型"), ("tasks", "任务"), ("elapsed", "耗时")):
-        card = MetricCard(title)
-        controller.status_widgets[key] = card
-        header_layout.addWidget(card)
-    layout.addWidget(header)
-
-    body_widget = QWidget()
-    body_widget.setMinimumHeight(380)
-    body = QHBoxLayout(body_widget)
-    body.setContentsMargins(0, 0, 0, 0)
-    body.setSpacing(14)
-    body.addWidget(build_run_controls(controller), 1)
-    body.addWidget(build_event_panel(controller), 2)
-    layout.addWidget(body_widget)
-
-    output_card = make_card("OutputPanel")
-    output_layout = QVBoxLayout(output_card)
-    output_layout.setContentsMargins(16, 14, 16, 16)
-    output_layout.setSpacing(10)
-    output_layout.addWidget(label("OUTPUTS", "Kicker"))
-    output_layout.addWidget(label("输出报告", "SectionTitle"))
-
-    controller.output_tabs = QTabWidget()
-    controller.summary_view = QTextBrowser()
-    controller.full_view = QTextBrowser()
-    controller.task_outputs = QTabWidget()
-    controller.files_view = QTextBrowser()
-    for browser in (controller.summary_view, controller.full_view, controller.files_view):
-        browser.setOpenExternalLinks(True)
-    controller.output_tabs.addTab(controller.summary_view, "精简报告")
-    controller.output_tabs.addTab(controller.full_view, "完整报告")
-    controller.output_tabs.addTab(controller.task_outputs, "任务输出")
-    controller.output_tabs.addTab(controller.files_view, "文件")
-    output_layout.addWidget(controller.output_tabs)
-    layout.addWidget(output_card)
-    layout.addStretch(1)
-    controller.clear_result_views()
+    scroll.setObjectName("PageScroll")
+    content = QWidget()
+    layout = QVBoxLayout(content)
+    layout.setContentsMargins(20, 22, 20, 26)
+    layout.setSpacing(16)
+    scroll.setWidget(content)
     return scroll
 
 
-def build_run_controls(controller: Any) -> QFrame:
-    card = make_card("ControlPanel")
-    card.setMinimumWidth(310)
-    card.setMinimumHeight(380)
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(18, 16, 18, 18)
-    layout.setSpacing(10)
-    layout.addWidget(label("CONTROL", "Kicker"))
-    layout.addWidget(label("运行设置", "SectionTitle"))
+def _build_run_hero(controller: Any) -> QFrame:
+    header = PlataPanel()
+    header.setObjectName("CommandHeader")
+    layout = QVBoxLayout(header)
+    layout.setContentsMargins(26, 24, 26, 24)
+    layout.setSpacing(22)
 
-    layout.addWidget(label("模型档位", "StatusLabel"))
+    left = QWidget()
+    left_layout = QVBoxLayout(left)
+    left_layout.setContentsMargins(0, 0, 0, 0)
+    left_layout.setSpacing(10)
+    welcome = QHBoxLayout()
+    avatar = QLabel("AI")
+    avatar.setObjectName("AvatarBubble")
+    avatar.setFixedSize(54, 54)
+    welcome_text = QLabel("欢迎使用 Multiagent Studio")
+    welcome_text.setObjectName("MutedText")
+    welcome.addWidget(avatar)
+    welcome.addWidget(welcome_text)
+    welcome.addStretch()
+    title = QLabel("用多 Agent 得到")
+    title.setObjectName("HeroTitle")
+    accent = QLabel("高质量方案")
+    accent.setObjectName("HeroAccent")
+    subtitle = QLabel("输入主题，启动协作流，在实时编排与报告区观察任务推进。")
+    subtitle.setObjectName("HeroSubtitle")
+    subtitle.setWordWrap(True)
+    left_layout.addLayout(welcome)
+    left_layout.addWidget(title)
+    left_layout.addWidget(accent)
+    left_layout.addWidget(subtitle)
+
+    metrics = QWidget()
+    metrics_layout = QGridLayout(metrics)
+    metrics_layout.setContentsMargins(0, 0, 0, 0)
+    metrics_layout.setHorizontalSpacing(12)
+    metrics_layout.setVerticalSpacing(12)
+    controller.status_widgets = {
+        "status": MetricCard("状态", "待运行"),
+        "model": MetricCard("模型", "flash"),
+        "tasks": MetricCard("任务", "0"),
+        "elapsed": MetricCard("耗时", "-"),
+    }
+    for index, card in enumerate(controller.status_widgets.values()):
+        metrics_layout.addWidget(card, 0, index)
+
+    layout.addWidget(left)
+    layout.addWidget(metrics)
+    return header
+
+
+def _build_quick_actions(controller: Any) -> QFrame:
+    card = QWidget()
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
+    actions = [
+        ("✓", "配置检查", "校验 agents/tasks", controller.validate_current_config),
+        ("↺", "清空结果", "重置本次工作区", controller.reset_workspace),
+        ("↗", "输出目录", "打开最新结果", controller.open_current_output_dir),
+    ]
+    for icon, title, subtitle, callback in actions:
+        layout.addWidget(_quick_action_card(icon, title, subtitle, callback))
+    return card
+
+
+def _quick_action_card(icon: str, title: str, subtitle: str, callback: Callable[[], None]) -> QFrame:
+    card = PlataPanel()
+    card.setObjectName("QuickActionCard")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(14, 14, 14, 14)
+    layout.setSpacing(8)
+    icon_label = QLabel(icon)
+    icon_label.setObjectName("QuickIcon")
+    title_label = QLabel(title)
+    title_label.setObjectName("QuickTitle")
+    subtitle_label = QLabel(subtitle)
+    subtitle_label.setObjectName("QuickSubtitle")
+    subtitle_label.setWordWrap(True)
+    action = QPushButton("执行")
+    action.setObjectName("LinkButton")
+    action.clicked.connect(callback)
+    layout.addWidget(icon_label)
+    layout.addWidget(title_label)
+    layout.addWidget(subtitle_label)
+    layout.addStretch()
+    layout.addWidget(action, 0, Qt.AlignmentFlag.AlignLeft)
+    return card
+
+
+def _build_run_controls(controller: Any) -> QFrame:
+    panel = GlassPanel()
+    panel.setObjectName("ControlPanel")
+    layout = QVBoxLayout(panel)
+    layout.setContentsMargins(20, 18, 20, 20)
+    layout.setSpacing(15)
+    heading = QLabel("工作流设置")
+    heading.setObjectName("SectionTitle")
+    layout.addWidget(heading)
+
+    label = QLabel("模型档位")
+    label.setObjectName("FieldLabel")
+    layout.addWidget(label)
     controller.model_combo = QComboBox()
-    controller.model_combo.addItems(list(MODEL_REGISTRY.aliases))
-    controller.model_combo.setCurrentText(MODEL_REGISTRY.default_alias())
-    controller.model_combo.setMinimumHeight(34)
+    controller.model_combo.setVisible(False)
+    controller.model_button_group = QButtonGroup(panel)
+    controller.model_button_group.setExclusive(True)
+    pill_row = QHBoxLayout()
+    for index, alias in enumerate(MODEL_REGISTRY.aliases):
+        controller.model_combo.addItem(alias)
+        button = QPushButton(alias)
+        button.setObjectName("PillButton")
+        button.setCheckable(True)
+        if index == 0:
+            button.setChecked(True)
+        controller.model_button_group.addButton(button, index)
+        button.clicked.connect(
+            lambda checked=False, i=index: _select_model(controller, i)
+        )
+        pill_row.addWidget(button)
+    pill_row.addStretch()
+    layout.addLayout(pill_row)
     layout.addWidget(controller.model_combo)
 
-    layout.addWidget(label("任务主题", "StatusLabel"))
+    topic_label = QLabel("任务主题")
+    topic_label.setObjectName("FieldLabel")
+    layout.addWidget(topic_label)
     controller.topic_edit = QTextEdit()
-    controller.topic_edit.setMinimumHeight(118)
-    controller.topic_edit.setMaximumHeight(138)
+    controller.topic_edit.setObjectName("TopicInput")
     controller.topic_edit.setPlainText(DEFAULT_TOPIC)
+    controller.topic_edit.setMinimumHeight(132)
     layout.addWidget(controller.topic_edit)
 
-    controller.api_warning = label("", "WarningLabel")
-    controller.api_warning.setMinimumHeight(38)
-    controller.api_warning.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    controller.api_warning = QLabel("")
+    controller.api_warning.setObjectName("WarningCard")
+    controller.api_warning.setWordWrap(True)
     layout.addWidget(controller.api_warning)
 
     controller.run_button = PulseButton("运行工作流")
-    controller.run_button.setObjectName("PrimaryButton")
-    controller.run_button.setMinimumHeight(38)
     controller.run_button.clicked.connect(controller.start_run)
     layout.addWidget(controller.run_button)
 
     controller.progress = QProgressBar()
     controller.progress.setRange(0, 100)
     controller.progress.setValue(0)
-    controller.progress.setMinimumHeight(22)
-    controller.progress.setMaximumHeight(22)
-    layout.addSpacing(2)
     layout.addWidget(controller.progress)
-    layout.addStretch(1)
-    return card
+    layout.addStretch()
+    return panel
 
 
-def build_event_panel(controller: Any) -> QFrame:
-    card = make_card("GlassPanel")
-    card.setMinimumHeight(380)
-    layout = QVBoxLayout(card)
-    layout.setContentsMargins(16, 14, 16, 16)
-    layout.setSpacing(10)
-    layout.addWidget(label("LIVE ORCHESTRATION", "Kicker"))
-    layout.addWidget(label("实时编排", "SectionTitle"))
+def _select_model(controller: Any, index: int) -> None:
+    controller.model_combo.setCurrentIndex(index)
+    controller.refresh_expected_task_count()
+    controller.refresh_status_cards()
+
+
+def _build_orchestration_panel(controller: Any) -> QFrame:
+    panel = PlataPanel()
+    panel.setObjectName("OrchestrationPanel")
+    layout = QVBoxLayout(panel)
+    layout.setContentsMargins(22, 20, 22, 22)
+    layout.setSpacing(12)
+    header = QHBoxLayout()
+    title = QLabel("实时编排")
+    title.setObjectName("SectionTitle")
+    controller.orchestration_badge = PlataStatusBadge("等待事件", "neutral")
+    header.addWidget(title)
+    header.addStretch()
+    header.addWidget(controller.orchestration_badge)
     controller.agent_graph = AnimatedAgentGraph()
-    layout.addWidget(controller.agent_graph, 2)
-    layout.addWidget(label("事件流", "Kicker"))
+    event_label = QLabel("事件流")
+    event_label.setObjectName("SmallSectionTitle")
     controller.event_list = MotionEventList()
-    controller.event_list.setMinimumHeight(104)
-    controller.event_list.setMaximumHeight(130)
-    layout.addWidget(controller.event_list, 1)
-    controller.reset_events()
+    layout.addLayout(header)
+    layout.addWidget(controller.agent_graph, 3)
+    layout.addWidget(event_label)
+    layout.addWidget(controller.event_list, 2)
+    return panel
+
+
+def _build_output_panel(controller: Any) -> QFrame:
+    panel = PlataPanel()
+    panel.setObjectName("OutputPanel")
+    layout = QVBoxLayout(panel)
+    layout.setContentsMargins(22, 20, 22, 22)
+    layout.setSpacing(12)
+    header = QHBoxLayout()
+    title = QLabel("Transactions")
+    title.setObjectName("SectionTitle")
+    subtitle = QLabel("输出报告")
+    subtitle.setObjectName("MutedText")
+    header.addWidget(title)
+    header.addWidget(subtitle)
+    header.addStretch()
+    layout.addLayout(header)
+
+    controller.output_tabs = QTabWidget()
+    controller.output_tabs.setObjectName("SegmentTabs")
+    controller.summary_view = QTextBrowser()
+    controller.summary_view.setObjectName("ReportView")
+    controller.full_view = QTextBrowser()
+    controller.full_view.setObjectName("ReportView")
+    controller.task_outputs_view = QTextBrowser()
+    controller.task_outputs_view.setObjectName("ReportView")
+    controller.files_view = QTextBrowser()
+    controller.files_view.setObjectName("ReportView")
+    controller.output_tabs.addTab(controller.summary_view, "精简报告")
+    controller.output_tabs.addTab(controller.full_view, "完整报告")
+    controller.output_tabs.addTab(controller.task_outputs_view, "任务输出")
+    controller.output_tabs.addTab(controller.files_view, "文件")
+    layout.addWidget(controller.output_tabs)
+    return panel
+
+
+def _build_page_header(title: str, subtitle: str, kicker: str) -> QFrame:
+    header = PlataPanel()
+    header.setObjectName("CommandHeader")
+    layout = QVBoxLayout(header)
+    layout.setContentsMargins(26, 24, 26, 24)
+    layout.setSpacing(8)
+    kicker_label = QLabel(kicker)
+    kicker_label.setObjectName("Kicker")
+    title_label = QLabel(title)
+    title_label.setObjectName("PageTitle")
+    subtitle_label = QLabel(subtitle)
+    subtitle_label.setObjectName("HeroSubtitle")
+    subtitle_label.setWordWrap(True)
+    layout.addWidget(kicker_label)
+    layout.addWidget(title_label)
+    layout.addWidget(subtitle_label)
+    return header
+
+
+def _config_summary_card(title: str, value_label: QLabel, subtitle: str) -> QFrame:
+    card = PlataPanel()
+    card.setObjectName("ConfigSummaryCard")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(7)
+    title_label = QLabel(title)
+    title_label.setObjectName("MetricLabel")
+    value_label.setObjectName("MetricValue")
+    subtitle_label = QLabel(subtitle)
+    subtitle_label.setObjectName("MutedText")
+    subtitle_label.setWordWrap(True)
+    layout.addWidget(title_label)
+    layout.addWidget(value_label)
+    layout.addWidget(subtitle_label)
     return card
 
 
-def build_config_page(controller: Any) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(24, 20, 24, 24)
-    layout.setSpacing(14)
-    header = make_card("ConfigHeader")
-    header_layout = QVBoxLayout(header)
-    header_layout.setContentsMargins(18, 14, 18, 14)
-    header_layout.setSpacing(3)
-    header_layout.addWidget(label("CONFIGURATION", "Kicker"))
-    header_layout.addWidget(label("配置中心", "PageTitle"))
-    header_layout.addWidget(label("编辑 agents/tasks，保存前自动校验配置。", "Muted"))
-    layout.addWidget(header)
-
-    controller.config_tabs = QTabWidget()
-    controller.agents_table = build_table(("id", "role", "goal", "backstory", "enabled"))
-    controller.tasks_table = build_table(("id", "name", "description", "expected_output", "agent_id", "context_task_ids", "enabled"))
-    controller.agents_json = QPlainTextEdit()
-    controller.tasks_json = QPlainTextEdit()
-    controller.validation_view = QTextBrowser()
-
-    controller.config_tabs.addTab(wrap_editor(controller.agents_table, controller.save_agents_table), "Agents")
-    controller.config_tabs.addTab(wrap_editor(controller.tasks_table, controller.save_tasks_table), "Tasks")
-    controller.config_tabs.addTab(build_json_tab(controller), "JSON 高级编辑")
-    controller.config_tabs.addTab(build_validation_tab(controller), "配置检查")
-    layout.addWidget(controller.config_tabs, 1)
-    controller.load_config_editors()
-    return page
+def _validation_summary_card(badge: PlataStatusBadge) -> QFrame:
+    card = PlataPanel()
+    card.setObjectName("ConfigSummaryCard")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(12)
+    title_label = QLabel("校验状态")
+    title_label.setObjectName("MetricLabel")
+    subtitle = QLabel("保存前建议检查一次配置完整性。")
+    subtitle.setObjectName("MutedText")
+    subtitle.setWordWrap(True)
+    layout.addWidget(title_label)
+    layout.addWidget(badge, 0, Qt.AlignmentFlag.AlignLeft)
+    layout.addWidget(subtitle)
+    return card
 
 
-def build_table(columns: tuple[str, ...]) -> QTableWidget:
-    table = QTableWidget()
-    table.setColumnCount(len(columns))
+def build_table(columns: list[str]) -> QTableWidget:
+    table = QTableWidget(0, len(columns))
+    table.setObjectName("ConfigTable")
     table.setHorizontalHeaderLabels(columns)
-    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     table.verticalHeader().setVisible(False)
+    table.verticalHeader().setDefaultSectionSize(48)
     table.setAlternatingRowColors(True)
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+    table.setWordWrap(False)
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    table.horizontalHeader().setMinimumSectionSize(110)
     return table
 
 
-def wrap_editor(table: QTableWidget, save_callback: Any) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(8, 8, 8, 8)
-    layout.addWidget(table)
-    controls = QHBoxLayout()
+def _wrap_editor(table: QTableWidget, controller: Any, kind: str) -> QWidget:
+    wrapper = PlataPanel()
+    wrapper.setObjectName("TableWorkspace")
+    layout = QVBoxLayout(wrapper)
+    layout.setContentsMargins(16, 14, 16, 16)
+    layout.setSpacing(12)
+    layout.addWidget(table, 1)
+    actions = QHBoxLayout()
     add_button = QPushButton("新增行")
-    remove_button = QPushButton("删除选中行")
+    add_button.setObjectName("SecondaryButton")
+    delete_button = QPushButton("删除选中行")
+    delete_button.setObjectName("SecondaryButton")
     save_button = QPushButton("保存")
     save_button.setObjectName("PrimaryButton")
-    add_button.clicked.connect(lambda: table.insertRow(table.rowCount()))
-    remove_button.clicked.connect(lambda: remove_selected_rows(table))
-    save_button.clicked.connect(save_callback)
-    controls.addWidget(add_button)
-    controls.addWidget(remove_button)
-    controls.addStretch(1)
-    controls.addWidget(save_button)
-    layout.addLayout(controls)
-    return page
+    if kind == "agents":
+        add_button.clicked.connect(lambda: table.insertRow(table.rowCount()))
+        delete_button.clicked.connect(lambda: _delete_selected_row(table))
+        save_button.clicked.connect(controller.save_agents_payload)
+    else:
+        add_button.clicked.connect(lambda: table.insertRow(table.rowCount()))
+        delete_button.clicked.connect(lambda: _delete_selected_row(table))
+        save_button.clicked.connect(controller.save_tasks_payload)
+    actions.addWidget(add_button)
+    actions.addWidget(delete_button)
+    actions.addStretch()
+    actions.addWidget(save_button)
+    layout.addLayout(actions)
+    return wrapper
 
 
-def build_json_tab(controller: Any) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(8, 8, 8, 8)
-    editors = QHBoxLayout()
-    editors.addWidget(wrap_json_editor("Agents JSON", controller.agents_json, controller.save_agents_json))
-    editors.addWidget(wrap_json_editor("Tasks JSON", controller.tasks_json, controller.save_tasks_json))
-    layout.addLayout(editors)
-    reload_button = QPushButton("重新读取配置")
-    reload_button.clicked.connect(controller.load_config_editors)
-    layout.addWidget(reload_button, alignment=Qt.AlignmentFlag.AlignRight)
-    return page
-
-
-def wrap_json_editor(title: str, editor: QPlainTextEdit, save_callback: Any) -> QFrame:
-    card = make_card("GlassPanel")
-    layout = QVBoxLayout(card)
-    layout.addWidget(label(title, "SectionTitle"))
-    layout.addWidget(editor)
-    save_button = QPushButton(f"保存 {title.split()[0]}")
-    save_button.setObjectName("PrimaryButton")
-    save_button.clicked.connect(save_callback)
-    layout.addWidget(save_button)
-    return card
-
-
-def build_validation_tab(controller: Any) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(8, 8, 8, 8)
-    check_button = QPushButton("检查配置")
-    check_button.setObjectName("PrimaryButton")
-    check_button.clicked.connect(controller.validate_current_config)
-    layout.addWidget(check_button, alignment=Qt.AlignmentFlag.AlignLeft)
-    layout.addWidget(controller.validation_view, 1)
-    return page
-
-
-def build_history_page(controller: Any) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(24, 20, 24, 24)
-    layout.setSpacing(14)
-    header = make_card("HistoryHeader")
-    header_layout = QVBoxLayout(header)
-    header_layout.setContentsMargins(18, 14, 18, 14)
-    header_layout.setSpacing(3)
-    header_layout.addWidget(label("RUN HISTORY", "Kicker"))
-    header_layout.addWidget(label("历史输出", "PageTitle"))
-    header_layout.addWidget(label("浏览 outputs 下已有运行记录，快速回看报告与元数据。", "Muted"))
-    layout.addWidget(header)
-    controller.history_combo = QComboBox()
-    controller.history_combo.currentIndexChanged.connect(controller.load_history_selection)
-    layout.addWidget(controller.history_combo)
-
-    controller.history_tabs = QTabWidget()
-    controller.history_summary = QTextBrowser()
-    controller.history_full = QTextBrowser()
-    controller.history_metadata = QTextBrowser()
-    controller.history_tabs.addTab(controller.history_summary, "精简报告")
-    controller.history_tabs.addTab(controller.history_full, "完整报告")
-    controller.history_tabs.addTab(controller.history_metadata, "元数据")
-    layout.addWidget(controller.history_tabs, 1)
-    return page
-
-
-def remove_selected_rows(table: QTableWidget) -> None:
-    rows = sorted({index.row() for index in table.selectedIndexes()}, reverse=True)
-    for row in rows:
+def _delete_selected_row(table: QTableWidget) -> None:
+    row = table.currentRow()
+    if row >= 0:
         table.removeRow(row)
-
-
-def populate_table(table: QTableWidget, rows: list[dict[str, Any]]) -> None:
-    table.setRowCount(len(rows))
-    columns = [table.horizontalHeaderItem(col).text() for col in range(table.columnCount())]
-    for row_index, row in enumerate(rows):
-        for col_index, key in enumerate(columns):
-            value = row.get(key, "")
-            item = QTableWidgetItem("true" if value is True else "false" if value is False else str(value))
-            table.setItem(row_index, col_index, item)
-
-
-def table_rows(table: QTableWidget) -> list[dict[str, Any]]:
-    columns = [table.horizontalHeaderItem(col).text() for col in range(table.columnCount())]
-    rows: list[dict[str, Any]] = []
-    for row_index in range(table.rowCount()):
-        row: dict[str, Any] = {}
-        if all(not (table.item(row_index, col) and table.item(row_index, col).text().strip()) for col in range(table.columnCount())):
-            continue
-        for col_index, key in enumerate(columns):
-            item = table.item(row_index, col_index)
-            value = item.text().strip() if item else ""
-            if key == "enabled":
-                row[key] = value.lower() not in {"false", "0", "no", "否"}
-            else:
-                row[key] = value
-        rows.append(row)
-    return rows

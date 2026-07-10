@@ -6,7 +6,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from crewai_multiagent_demo.utils.paths import DEFAULT_CACHE_DIR, DEFAULT_ENV_FILE, PROJECT_ROOT
+from crewai_multiagent_demo.utils.paths import (
+    DEFAULT_CACHE_DIR,
+    DEFAULT_ENV_FILE,
+    IS_FROZEN,
+    LEGACY_ROOT,
+    PROJECT_ROOT,
+)
 
 
 LAST_ENV_FILE: Path | None = None
@@ -33,14 +39,18 @@ def candidate_env_files(env_file: Path | None = None) -> list[Path]:
     candidates: list[Path] = []
     explicit = os.getenv("MULTIAGENT_ENV_FILE")
     project_root = os.getenv("MULTIAGENT_PROJECT_ROOT")
-    for value in (
+    values: list[Path | None] = [
         env_file,
         Path(explicit) if explicit else None,
-        Path.cwd() / ".env",
         Path(project_root) / ".env" if project_root else None,
-        PROJECT_ROOT / ".env",
         DEFAULT_ENV_FILE,
-    ):
+    ]
+    if not IS_FROZEN:
+        values.extend((Path.cwd() / ".env", PROJECT_ROOT / ".env"))
+    else:
+        values.append(LEGACY_ROOT / ".env")
+
+    for value in values:
         if value is None:
             continue
         path = Path(value).expanduser()

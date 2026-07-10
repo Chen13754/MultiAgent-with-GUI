@@ -6,15 +6,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QStackedWidget,
-    QTextBrowser,
     QWidget,
 )
 
@@ -40,7 +40,7 @@ from crewai_multiagent_demo.gui.state import (
     status_label,
 )
 from crewai_multiagent_demo.gui.styles import APP_QSS
-from crewai_multiagent_demo.gui.widgets import fade_in
+from crewai_multiagent_demo.gui.widgets import fade_in, show_success_sheet
 from crewai_multiagent_demo.llm.model_registry import MODEL_REGISTRY
 from crewai_multiagent_demo.utils.environment import (
     api_key_env_names_for_model,
@@ -68,7 +68,7 @@ class RunWorker(QThread):
                 model_alias=self.model_alias,
                 on_event=self.event_received.emit,
             )
-        except Exception as exc:  # pragma: no cover - exercised through GUI smoke/manual use.
+        except Exception as exc:  # pragma: no cover - exercised through GUI/manual use.
             self.failed.emit(str(exc))
             return
         self.completed.emit(result)
@@ -108,6 +108,7 @@ class MultiagentStudio(QMainWindow):
         shell.addWidget(self.pages, 1)
 
         self.setStyleSheet(APP_QSS)
+        self.load_config_editors()
         self.refresh_status_cards()
         self.refresh_history()
 
@@ -116,7 +117,7 @@ class MultiagentStudio(QMainWindow):
             self.lock_hint.setText(RUN_LOCK_REASON)
             return
         self.pages.setCurrentIndex(index)
-        fade_in(self.pages.currentWidget(), 150)
+        fade_in(self.pages.currentWidget(), 170)
         for button_index, button in enumerate(self.nav_buttons):
             button.setChecked(button_index == index)
         if index == 2:
@@ -135,6 +136,9 @@ class MultiagentStudio(QMainWindow):
         self.run_button.setEnabled(True)
         self.run_button.set_pulsing(locked)
         self.model_combo.setEnabled(not locked)
+        if hasattr(self, "model_button_group"):
+            for button in self.model_button_group.buttons():
+                button.setEnabled(not locked)
         self.topic_edit.setEnabled(not locked)
         self.lock_hint.setText(RUN_LOCK_REASON if locked else "")
         self.run_button.setText("工作流运行中" if locked else "运行工作流")
@@ -147,7 +151,7 @@ class MultiagentStudio(QMainWindow):
         required_keys = ", ".join(api_key_env_names_for_model(model.crewai_model))
         if not has_api_key_for_model(model.crewai_model):
             self.run_status = RunStatus.FAILED
-            self.api_warning.setText(f"未检测到 API key。请先在 .env 中配置 {required_keys}。")
+            self.api_warning.setText(f"未检测到 API key。请先在根目录 .env 中配置 {required_keys}。")
             self.refresh_status_cards()
             QMessageBox.warning(self, "缺少 API key", f"缺少 {required_keys}，无法运行。")
             return
@@ -180,6 +184,7 @@ class MultiagentStudio(QMainWindow):
         self.agent_graph.set_progress(progress)
         self.agent_graph.handle_event(event)
         self.add_event_item(event)
+        self.refresh_status_cards()
 
     def handle_completed(self, result: object) -> None:
         self.last_result = result
@@ -190,7 +195,13 @@ class MultiagentStudio(QMainWindow):
         self.refresh_status_cards()
         self.render_result(result)
         self.refresh_history()
-        QMessageBox.information(self, "运行完成", f"运行完成，输出目录：{getattr(result, 'run_dir', '')}")
+        self.output_tabs.setCurrentIndex(0)
+        show_success_sheet(
+            self,
+            "运行成功",
+            f"输出目录：{getattr(result, 'run_dir', '')}",
+            "查看报告",
+        )
 
     def handle_failed(self, error: str) -> None:
         self.run_status = RunStatus.FAILED
@@ -207,11 +218,35 @@ class MultiagentStudio(QMainWindow):
         tasks = len(getattr(self.last_result, "task_outputs", []) or [])
         elapsed = getattr(self.last_result, "elapsed_seconds", None)
         current_status = normalize_status(self.run_status.value)
-        self.status_widgets["status"].set_value(status_label(current_status.value))
-        self.status_widgets["status"].set_status(current_status.value)
-        self.status_widgets["model"].set_value(str(model))
-        self.status_widgets["tasks"].set_value(str(tasks))
-        self.status_widgets["elapsed"].set_value(f"{elapsed:.1f}s" if elapsed is not None else "-")
+        if hasattr(self, "status_widgets"):
+            self.status_widgets["status"].set_value(status_label(current_status.value))
+            self.status_widgets["status"].set_status(current_status.value)
+            self.status_widgets["model"].set_value(str(model))
+            self.status_widgets["tasks"].set_value(str(tasks))
+            self.status_widgets["elapsed"].set_value(f"{elapsed:.1f}s" if elapsed is not None else "-")
+
+        progress_value = self.progress.value() if hasattr(self, "progress") else 0
+        active_agent = "等待启动"
+        if self.events:
+            active_agent = str(self.events[-1].get("agent") or event_label(str(self.events[-1].get("type", ""))))
+        if hasattr(self, "workflow_card"):
+            self.workflow_card.set_metrics(
+                model=str(model),
+                status=status_label(current_status.value),
+                tasks=str(tasks or self.expected_task_count),
+                elapsed=f"{elapsed:.1f}s" if elapsed is not None else "-",
+                progress=progress_value,
+                active_agent=active_agent,
+            )
+        if hasattr(self, "orchestration_badge"):
+            badge_status = {
+                RunStatus.RUNNING.value: "warning",
+                RunStatus.SUCCEEDED.value: "success",
+                RunStatus.FAILED.value: "danger",
+            }.get(current_status.value, "neutral")
+            self.orchestration_badge.setText(status_label(current_status.value))
+            self.orchestration_badge.set_status(badge_status)
+
         env_hint = loaded_env_file() or Path(os.getenv("MULTIAGENT_ENV_FILE") or PROJECT_ROOT / ".env")
         model_spec = MODEL_REGISTRY.resolve(str(model))
         required_keys = ", ".join(api_key_env_names_for_model(model_spec.crewai_model))
@@ -242,27 +277,23 @@ class MultiagentStudio(QMainWindow):
             details.append(str(event["error"]))
         text = f"{event_label(str(event.get('type', '')))}  {event.get('time', '')}"
         if details:
-            text += "\n" + " · ".join(details)
+            text += "\n" + " / ".join(details)
         self.event_list.add_motion_item(text, str(event.get("type", "")))
 
     def clear_result_views(self) -> None:
         self.summary_view.setMarkdown("暂无运行结果。")
         self.full_view.setMarkdown("暂无运行结果。")
-        self.task_outputs.clear()
-        empty = QTextBrowser()
-        empty.setMarkdown("暂无任务输出。")
-        self.task_outputs.addTab(empty, "任务输出")
+        self.task_outputs_view.setMarkdown("暂无任务输出。")
         self.files_view.setPlainText("暂无文件。")
 
     def render_result(self, result: object) -> None:
         self.summary_view.setMarkdown(str(getattr(result, "concise_report", "")))
         self.full_view.setMarkdown(str(getattr(result, "full_report", "")))
-        self.task_outputs.clear()
+        task_sections = []
         for index, task_output in enumerate(getattr(result, "task_outputs", []) or [], start=1):
             title = task_output.get("agent") or f"Task {index}"
-            view = QTextBrowser()
-            view.setMarkdown(task_output.get("output", ""))
-            self.task_outputs.addTab(view, f"{index}. {title}")
+            task_sections.append(f"## {index}. {title}\n\n{task_output.get('output', '')}")
+        self.task_outputs_view.setMarkdown("\n\n---\n\n".join(task_sections) if task_sections else "暂无任务输出。")
         run_dir = getattr(result, "run_dir", "")
         files = ["full_report.md", "summary_report.md", "run_metadata.md", "events.json"]
         self.files_view.setPlainText(str(run_dir) + "\n\n" + "\n".join(files))
@@ -274,7 +305,11 @@ class MultiagentStudio(QMainWindow):
         self.agents_json.setPlainText(snapshot.agents_json)
         self.tasks_json.setPlainText(snapshot.tasks_json)
         self.expected_task_count = snapshot.enabled_task_count
-        self.validation_view.setPlainText(snapshot.validation_text)
+        self.validation_text.setPlainText(snapshot.validation_text)
+        self.agents_summary_value.setText(str(len(snapshot.agents)))
+        self.tasks_summary_value.setText(str(len(snapshot.task_rows)))
+        self.config_validation_badge.setText("待检查")
+        self.config_validation_badge.set_status("neutral")
 
     def save_agents_table(self) -> None:
         self.save_agents_payload(table_rows(self.agents_table))
@@ -305,7 +340,7 @@ class MultiagentStudio(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", str(exc))
             return
-        QMessageBox.information(self, "已保存", "Agents 已保存。")
+        show_success_sheet(self, "已保存", "Agents 配置已保存。", "完成")
 
     def save_tasks_payload(self, payload: Any) -> None:
         try:
@@ -314,45 +349,103 @@ class MultiagentStudio(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", str(exc))
             return
-        QMessageBox.information(self, "已保存", "Tasks 已保存。")
+        show_success_sheet(self, "已保存", "Tasks 配置已保存。", "完成")
 
     def validate_current_config(self, *, show_message: bool = True) -> None:
         try:
             validation_text = self.config_service.validation_text()
         except Exception as exc:
-            self.validation_view.setPlainText(f"配置有问题：{exc}")
+            self.validation_text.setPlainText(f"配置有问题：{exc}")
+            self.config_validation_badge.setText("检查失败")
+            self.config_validation_badge.set_status("danger")
             if show_message:
                 QMessageBox.critical(self, "配置有问题", str(exc))
             return
-        self.validation_view.setPlainText(validation_text)
+        self.validation_text.setPlainText(validation_text)
+        self.config_validation_badge.setText("检查通过")
+        self.config_validation_badge.set_status("success")
         if show_message:
-            QMessageBox.information(self, "配置检查", "配置检查通过。")
+            show_success_sheet(self, "配置检查通过", "Agents 和 Tasks 可以正常运行。", "完成")
 
     def refresh_history(self) -> None:
-        current = self.history_combo.currentData()
-        self.history_combo.blockSignals(True)
-        self.history_combo.clear()
+        current = self.selected_history_dir()
+        self.history_list.blockSignals(True)
+        self.history_list.clear()
         run_dirs = self.history_service.list_run_dirs()
         if not DEFAULT_OUTPUT_DIR.exists():
-            self.history_combo.addItem("还没有输出目录", None)
+            item = QListWidgetItem("还没有输出目录")
+            item.setData(Qt.ItemDataRole.UserRole, None)
+            self.history_list.addItem(item)
         elif not run_dirs:
-            self.history_combo.addItem("还没有历史运行", None)
+            item = QListWidgetItem("还没有历史运行")
+            item.setData(Qt.ItemDataRole.UserRole, None)
+            self.history_list.addItem(item)
         else:
             for path in run_dirs:
-                self.history_combo.addItem(path.name, path)
+                item = QListWidgetItem(self.history_item_label(path))
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                self.history_list.addItem(item)
+            selected_row = 0
             if current:
-                index = self.history_combo.findData(current)
-                if index >= 0:
-                    self.history_combo.setCurrentIndex(index)
-        self.history_combo.blockSignals(False)
+                for index in range(self.history_list.count()):
+                    if self.history_list.item(index).data(Qt.ItemDataRole.UserRole) == current:
+                        selected_row = index
+                        break
+            self.history_list.setCurrentRow(selected_row)
+        self.history_list.blockSignals(False)
         self.load_history_selection()
 
-    def load_history_selection(self) -> None:
-        selected = self.history_combo.currentData()
+    def load_history_selection(self, *_args: object) -> None:
+        selected = self.selected_history_dir()
         history = self.history_service.load_selection(selected)
         self.history_summary.setMarkdown(history.summary)
         self.history_full.setMarkdown(history.full_report)
         self.history_metadata.setMarkdown(history.metadata)
+
+    def selected_history_dir(self) -> Path | None:
+        item = self.history_list.currentItem() if hasattr(self, "history_list") else None
+        selected = item.data(Qt.ItemDataRole.UserRole) if item else None
+        return selected if isinstance(selected, Path) else None
+
+    def history_item_label(self, path: Path) -> str:
+        metadata = path / "run_metadata.md"
+        model = "-"
+        elapsed = "-"
+        if metadata.exists():
+            text = metadata.read_text(encoding="utf-8", errors="ignore")
+            for line in text.splitlines():
+                lowered = line.lower()
+                if "model" in lowered and model == "-":
+                    model = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+                if "elapsed" in lowered and elapsed == "-":
+                    elapsed = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+        return f"{path.name}\n模型 {model} · 耗时 {elapsed}"
+
+    def reset_workspace(self) -> None:
+        self.events = []
+        self.last_result = None
+        self.progress.setValue(0)
+        self.run_status = RunStatus.IDLE
+        self.reset_events()
+        self.clear_result_views()
+        self.refresh_status_cards()
+
+    def open_current_output_dir(self) -> None:
+        run_dir = getattr(self.last_result, "run_dir", None)
+        if run_dir and Path(run_dir).exists():
+            os.startfile(str(run_dir))
+            return
+        if DEFAULT_OUTPUT_DIR.exists():
+            os.startfile(str(DEFAULT_OUTPUT_DIR))
+            return
+        QMessageBox.information(self, "输出目录", "还没有可打开的输出目录。")
+
+    def open_selected_history_dir(self) -> None:
+        selected = self.selected_history_dir()
+        if selected and selected.exists():
+            os.startfile(str(selected))
+            return
+        QMessageBox.information(self, "历史输出", "请先选择一条历史记录。")
 
     def closeEvent(self, event: Any) -> None:
         if self.worker and self.worker.isRunning():
@@ -378,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(QFont("Microsoft YaHei UI", 10))
     window = MultiagentStudio()
     window.show()
-    if args.smoke_test:
+    if args.smoke_test or os.getenv("MULTIAGENT_GUI_SMOKE") == "1":
         QTimer.singleShot(250, app.quit)
     return app.exec()
 

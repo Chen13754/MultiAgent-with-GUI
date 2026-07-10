@@ -91,6 +91,19 @@ class ConfigEditorService:
         validate_configs(agents, tasks)
         ConfigLoader.save_json_file(self.tasks_file, payload)
 
+    def save_config_payloads(self, agents_payload: Any, tasks_payload: Any) -> None:
+        """Validate both editable documents together before either is written."""
+
+        if not isinstance(agents_payload, list):
+            raise ValueError("agents 顶层必须是数组")
+        if not isinstance(tasks_payload, list):
+            raise ValueError("tasks 顶层必须是数组")
+        agents = [parse_agent_config(item, index) for index, item in enumerate(agents_payload)]
+        tasks = [parse_task_config(item, index) for index, item in enumerate(tasks_payload)]
+        validate_configs(agents, tasks)
+        ConfigLoader.save_json_file(self.agents_file, agents_payload)
+        ConfigLoader.save_json_file(self.tasks_file, tasks_payload)
+
     @staticmethod
     def parse_json_payload(text: str, label: str) -> Any:
         try:

@@ -66,6 +66,18 @@ def test_config_editor_service_parses_json_errors() -> None:
         ConfigEditorService.parse_json_payload("[", "Agents")
 
 
+def test_config_editor_service_saves_json_documents_as_one_validated_bundle(tmp_path) -> None:
+    write_config(tmp_path, valid_agents(), valid_tasks())
+    service = ConfigEditorService(tmp_path)
+    agents = [{**valid_agents()[0], "id": "new_agent"}]
+    tasks = [{**valid_tasks()[0], "agent_id": "new_agent"}]
+
+    service.save_config_payloads(agents, tasks)
+
+    assert json.loads((tmp_path / "agents.json").read_text(encoding="utf-8"))[0]["id"] == "new_agent"
+    assert json.loads((tmp_path / "tasks.json").read_text(encoding="utf-8"))[0]["agent_id"] == "new_agent"
+
+
 def test_history_service_lists_runs_and_reads_missing_files(tmp_path) -> None:
     old = tmp_path / "20260101_120000"
     new = tmp_path / "20260102_120000"
