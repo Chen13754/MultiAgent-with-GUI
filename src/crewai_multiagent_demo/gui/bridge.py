@@ -27,7 +27,7 @@ from crewai_multiagent_demo.utils.paths import (
     DEFAULT_OUTPUT_DIR,
 )
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 WorkflowRunner = Callable[..., object]
 ApiKeyChecker = Callable[[str], bool]
 
@@ -209,11 +209,14 @@ class StudioBridge(QObject):
         except Exception as exc:
             return self._json(self._response(ok=False, code="invalid_config", message=str(exc)))
 
-    @Slot(str, str, result=str)
-    def saveConfig(self, kind: str, payload_json: str) -> str:  # noqa: N802
+    @Slot(str, str, str, result=str)
+    def saveConfig(self, kind: str, payload_json: str, base_revision: str = "") -> str:  # noqa: N802
         if self.is_running():
             return self._json(self._response(ok=False, code="run_active", message="运行中不能修改配置。"))
         try:
+            current = self.config_service.load_snapshot()
+            if base_revision and base_revision != current.revision:
+                return self._json(self._conflict_response(current))
             payload = json.loads(payload_json)
             if kind == "agents":
                 self.config_service.save_agents_payload(payload)
@@ -222,17 +225,24 @@ class StudioBridge(QObject):
             else:
                 raise ValueError("未知配置类型")
         except Exception as exc:
-            return self._json(self._response(ok=False, code="save_failed", message=str(exc)))
+            return self._json(
+                self._response(ok=False, code="save_failed", message=str(exc), data=self._config_snapshot())
+            )
         return self._json(self._response(data=self._config_snapshot()))
 
-    @Slot(str, str, result=str)
-    def saveConfigBundle(self, agents_json: str, tasks_json: str) -> str:  # noqa: N802
+    @Slot(str, str, str, result=str)
+    def saveConfigBundle(self, agents_json: str, tasks_json: str, base_revision: str = "") -> str:  # noqa: N802
         if self.is_running():
             return self._json(self._response(ok=False, code="run_active", message="运行中不能修改配置。"))
         try:
+            current = self.config_service.load_snapshot()
+            if base_revision and base_revision != current.revision:
+                return self._json(self._conflict_response(current))
             self.config_service.save_config_payloads(json.loads(agents_json), json.loads(tasks_json))
         except Exception as exc:
-            return self._json(self._response(ok=False, code="save_failed", message=str(exc)))
+            return self._json(
+                self._response(ok=False, code="save_failed", message=str(exc), data=self._config_snapshot())
+            )
         return self._json(self._response(data=self._config_snapshot()))
 
     @Slot(str, result=str)
@@ -244,17 +254,12 @@ class StudioBridge(QObject):
         try:
             current = self.config_service.load_snapshot()
             if base_revision and base_revision != current.revision:
-                return self._json(
-                    self._response(
-                        ok=False,
-                        code="config_conflict",
-                        message="配置已被其他窗口修改，请重新读取后再保存画布。",
-                        data=self._config_snapshot(),
-                    )
-                )
+                return self._json(self._conflict_response(current))
             self.config_service.save_graph_payload(json.loads(graph_json))
         except Exception as exc:
-            return self._json(self._response(ok=False, code="save_failed", message=str(exc)))
+            return self._json(
+                self._response(ok=False, code="save_failed", message=str(exc), data=self._config_snapshot())
+            )
         return self._json(self._response(data=self._config_snapshot()))
 
     @Slot(result=str)
@@ -343,6 +348,15 @@ class StudioBridge(QObject):
         self._events.append(public_event)
         event_type = str(public_event.get("type", ""))
         self._state["progress"] = progress_from_events(self._events, self._state["taskCount"])
+        task_id = str(public_event.get("task_id", ""))
+        task_status = {
+            "task_started": "running",
+            "task_completed": "succeeded",
+            "task_failed": "failed",
+            "task_cancelled": "cancelled",
+        }.get(str(public_event.get("type", "")))
+        if task_id and task_status:
+            self._state["taskStates"] = {**self._state.get("taskStates", {}), task_id: task_status}
         self._state["activeAgent"] = str(
             public_event.get("task_name") or public_event.get("agent") or event_label(event_type)
         )
@@ -422,6 +436,23 @@ class StudioBridge(QObject):
             "validationText": snapshot.validation_text,
         }
 
+    def _conflict_response(self, snapshot: Any) -> dict[str, Any]:
+        return self._response(
+            ok=False,
+            code="config_conflict",
+            message="配置已被其他窗口修改，请重新读取后再保存。",
+            data={
+                "agents": snapshot.agents,
+                "tasks": snapshot.tasks,
+                "graph": snapshot.graph,
+                "revision": snapshot.revision,
+                "agentsJson": snapshot.agents_json,
+                "tasksJson": snapshot.tasks_json,
+                "enabledTaskCount": snapshot.enabled_task_count,
+                "validationText": snapshot.validation_text,
+            },
+        )
+
     def _history_items(self) -> list[dict[str, Any]]:
         self._refresh_history_paths()
         return [
@@ -456,6 +487,7 @@ class StudioBridge(QObject):
             "taskCount": 0,
             "activeAgent": "等待启动",
             "events": [],
+            "taskStates": {},
             "result": None,
             "error": None,
         }

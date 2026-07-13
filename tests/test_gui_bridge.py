@@ -108,6 +108,22 @@ def test_bridge_rejects_stale_canvas_revision(tmp_path) -> None:
     assert stale["code"] == "config_conflict"
 
 
+def test_bridge_rejects_stale_config_revision_for_task_saves(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    write_config(config_dir)
+    bridge = StudioBridge(config_dir=config_dir, output_dir=tmp_path / "outputs", api_key_checker=lambda _model: True)
+    current = response(bridge.bootstrap())["data"]["config"]
+    tasks = current["tasks"]
+
+    first = response(bridge.saveConfig("tasks", json.dumps(tasks), current["revision"]))
+    stale = response(bridge.saveConfig("tasks", json.dumps(tasks), current["revision"]))
+
+    assert first["ok"] is True
+    assert stale["ok"] is False
+    assert stale["code"] == "config_conflict"
+    assert stale["data"]["revision"] != current["revision"]
+
+
 def test_bridge_reports_missing_api_key_without_starting_worker(tmp_path) -> None:
     config_dir = tmp_path / "config"
     write_config(config_dir)
@@ -160,7 +176,7 @@ def test_bridge_streams_fake_workflow_result(tmp_path) -> None:
     def fake_runner(**kwargs):
         received.update(kwargs)
         kwargs["on_event"]({"type": "run_started", "agent": "analyst"})
-        kwargs["on_event"]({"type": "task_completed", "agent": "analyst"})
+        kwargs["on_event"]({"type": "task_completed", "task_id": "analysis", "agent": "analyst"})
         run_dir = output_dir / "20260710_110000"
         run_dir.mkdir(parents=True)
         return RunResult(
@@ -193,6 +209,7 @@ def test_bridge_streams_fake_workflow_result(tmp_path) -> None:
     state = response(bridge.bootstrap())["data"]["runState"]
     assert state["status"] == "succeeded"
     assert state["progress"] == 100
+    assert state["taskStates"]["analysis"] == "succeeded"
     assert state["result"]["summary"] == "summary"
     assert received["config_dir"] == config_dir
     assert received["output_dir"] == output_dir
@@ -213,4 +230,4 @@ def test_bridge_can_recover_from_corrupt_workflow(tmp_path) -> None:
     assert failed["ok"] is False
     assert failed["code"] == "bootstrap_failed"
     assert recovered["ok"] is True
-    assert recovered["data"]["protocolVersion"] == 1
+    assert recovered["data"]["protocolVersion"] == 2

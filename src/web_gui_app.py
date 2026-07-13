@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             QTimer.singleShot(
                 700,
                 lambda: window.page.runJavaScript(
-                    "document.documentElement.dataset.studioProtocol === '1'",
+                    "document.documentElement.dataset.studioProtocol === '2'",
                     finish,
                 ),
             )

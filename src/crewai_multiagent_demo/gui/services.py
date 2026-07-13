@@ -66,6 +66,9 @@ class ConfigEditorService:
     def enabled_task_count(self) -> int:
         return max(1, sum(1 for task in self.loader.load_tasks() if task.enabled))
 
+    def revision(self) -> str:
+        return self.loader.revision()
+
     def validation_text(self) -> str:
         return self._validation_text(self.loader.load(validate=True))
 

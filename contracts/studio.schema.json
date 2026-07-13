@@ -4,6 +4,7 @@
   "title": "Multiagent Studio Bridge Contract",
   "$defs": {
     "RunStatus": {"type": "string", "enum": ["idle", "running", "succeeded", "failed", "cancelled"]},
+    "TaskStatus": {"type": "string", "enum": ["waiting", "running", "succeeded", "failed", "cancelled"]},
     "ArtifactRole": {"type": "string", "enum": ["none", "full_report", "summary"]},
     "AgentConfig": {
       "type": "object",
@@ -62,11 +63,12 @@
     },
     "RunState": {
       "type": "object",
-      "required": ["status", "runId", "progress", "modelAlias", "topic", "taskCount", "activeAgent", "events", "result", "error"],
+      "required": ["status", "runId", "progress", "modelAlias", "topic", "taskCount", "activeAgent", "events", "taskStates", "result", "error"],
       "properties": {
         "status": {"$ref": "#/$defs/RunStatus"}, "runId": {"type": "string"}, "progress": {"type": "number"},
         "modelAlias": {"type": "string"}, "topic": {"type": "string"}, "taskCount": {"type": "number"},
         "activeAgent": {"type": "string"}, "events": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "taskStates": {"type": "object", "additionalProperties": {"$ref": "#/$defs/TaskStatus"}},
         "result": {"anyOf": [{"$ref": "#/$defs/RunResult"}, {"type": "null"}]},
         "error": {"anyOf": [{"type": "string"}, {"type": "null"}]}
       }

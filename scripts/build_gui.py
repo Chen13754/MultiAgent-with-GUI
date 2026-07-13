@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 FRONTEND_DIST = FRONTEND_DIR / "dist"
 PYTHON = Path(sys.executable)
-WINDOWS_VERSION_FILE = PROJECT_ROOT / "scripts" / "windows_version_info.txt"
 WINDOWS_LAUNCHER_SOURCE = PROJECT_ROOT / "scripts" / "windows_launcher.cs"
 
 
@@ -103,6 +103,7 @@ def build_windows_launcher(bundle: Path) -> Path | None:
         raise RuntimeError(f"Windows launcher source is missing: {WINDOWS_LAUNCHER_SOURCE}")
 
     launcher = PROJECT_ROOT / "MultiagentStudio.exe"
+    launcher_version_source = write_launcher_version_source(project_version())
     run(
         [
             str(windows_csharp_compiler()),
@@ -113,6 +114,7 @@ def build_windows_launcher(bundle: Path) -> Path | None:
             "/reference:System.Windows.Forms.dll",
             f"/out:{launcher}",
             str(WINDOWS_LAUNCHER_SOURCE),
+            str(launcher_version_source),
         ]
     )
     if not launcher.is_file():
@@ -125,6 +127,71 @@ def project_version() -> str:
         if line.strip().startswith("version ="):
             return line.split("=", 1)[1].strip().strip('"')
     raise RuntimeError("Project version is missing from pyproject.toml")
+
+
+def numeric_version(version: str) -> str:
+    parts = re.findall(r"\d+", version)
+    if not parts:
+        raise RuntimeError(f"Invalid project version: {version}")
+    return ".".join((parts + ["0", "0", "0", "0"])[:4])
+
+
+def write_windows_version_file(version: str) -> Path:
+    numeric = numeric_version(version)
+    path = PROJECT_ROOT / ".cache" / "build" / "windows_version_info.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "VSVersionInfo(\n"
+        "  ffi=FixedFileInfo(\n"
+        f"    filevers={tuple(int(part) for part in numeric.split('.'))},\n"
+        f"    prodvers={tuple(int(part) for part in numeric.split('.'))},\n"
+        "    mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)\n"
+        "  ),\n"
+        "  kids=[StringFileInfo([StringTable(u'040904B0', ["
+        "StringStruct(u'CompanyName', u'Multiagent Studio'),"
+        "StringStruct(u'FileDescription', u'Multiagent Studio Desktop'),"
+        f"StringStruct(u'FileVersion', u'{version}'),"
+        "StringStruct(u'InternalName', u'MultiagentStudio'),"
+        "StringStruct(u'OriginalFilename', u'MultiagentStudio.exe'),"
+        "StringStruct(u'ProductName', u'Multiagent Studio'),"
+        f"StringStruct(u'ProductVersion', u'{version}')])]),\n"
+        "    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])\n"
+        "  ]\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_launcher_version_source(version: str) -> Path:
+    numeric = numeric_version(version)
+    path = PROJECT_ROOT / ".cache" / "build" / "launcher_version.cs"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "using System.Reflection;\n"
+        f"[assembly: AssemblyVersion(\"{numeric}\")]\n"
+        f"[assembly: AssemblyFileVersion(\"{numeric}\")]\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def source_metadata() -> dict[str, object]:
+    commit = os.getenv("GITHUB_SHA", "")
+    dirty = False
+    if not commit:
+        try:
+            commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, check=True, capture_output=True, text=True
+            ).stdout.strip()
+            dirty = bool(
+                subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, check=True, capture_output=True, text=True
+                ).stdout.strip()
+            )
+        except (OSError, subprocess.CalledProcessError):
+            commit = "unknown"
+    return {"commit": commit or "unknown", "dirty": dirty}
 
 
 def sign_and_notarize_bundle(bundle: Path) -> None:
@@ -210,6 +277,11 @@ def check_prerequisites(*, require_frontend_dist: bool = False) -> None:
     if missing_modules:
         raise RuntimeError("Missing Python build modules: " + ", ".join(missing_modules))
 
+    if platform.system() == "Windows":
+        if not WINDOWS_LAUNCHER_SOURCE.is_file():
+            raise RuntimeError(f"Missing Windows launcher source: {WINDOWS_LAUNCHER_SOURCE}")
+        windows_csharp_compiler()
+
     manager = pnpm_command()
     print(f"Build prerequisites ready: target={target_name()}, package_manager={' '.join(manager)}")
 
@@ -232,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     run([*pnpm, "install", "--frozen-lockfile", "--store-dir", str(store_dir)], cwd=FRONTEND_DIR)
     run([*pnpm, "run", "build"], cwd=FRONTEND_DIR)
     check_prerequisites(require_frontend_dist=True)
+    version = project_version()
+    version_file = write_windows_version_file(version) if os.name == "nt" else None
 
     separator = ";" if os.name == "nt" else ":"
     config_data = f"{PROJECT_ROOT / 'config'}{separator}config"
@@ -266,15 +340,15 @@ def main(argv: list[str] | None = None) -> int:
             "src/web_gui_app.py",
         ]
     if os.name == "nt":
-        pyinstaller_command[-1:-1] = ["--version-file", str(WINDOWS_VERSION_FILE)]
+        pyinstaller_command[-1:-1] = ["--version-file", str(version_file)]
     run(pyinstaller_command)
     bundle = PROJECT_ROOT / "dist" / ("MultiagentStudio.app" if platform.system() == "Darwin" else "MultiagentStudio")
     if not bundle.exists():
         raise RuntimeError(f"PyInstaller bundle was not produced: {bundle}")
-    commit = os.getenv("GITHUB_SHA", "local")
+    metadata = source_metadata()
     (bundle / "build-info.json").write_text(
         json.dumps(
-            {"version": project_version(), "target": target_name(), "commit": commit},
+            {"version": version, "target": target_name(), **metadata},
             indent=2,
         )
         + "\n",

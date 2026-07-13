@@ -104,7 +104,7 @@ def test_loader_migrates_legacy_files_to_versioned_workflow(tmp_path) -> None:
     loader.migrate_legacy_config()
 
     document = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2
     assert document["tasks"][0]["artifact_role"] == "full_report"
     assert (tmp_path / "agents.json.legacy.bak").exists()
     assert (tmp_path / "tasks.json.legacy.bak").exists()

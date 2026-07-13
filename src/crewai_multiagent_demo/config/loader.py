@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from dataclasses import dataclass
 from json import JSONDecodeError
@@ -15,7 +16,7 @@ from crewai_multiagent_demo.domain.tasks import TaskConfig
 from crewai_multiagent_demo.utils.files import atomic_write_json
 from crewai_multiagent_demo.utils.paths import DEFAULT_CONFIG_DIR
 
-WORKFLOW_SCHEMA_VERSION = 1
+WORKFLOW_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -136,24 +137,31 @@ def _normalise_graph(value: Any) -> dict[str, Any]:
             if not isinstance(raw_position, dict):
                 continue
             try:
-                positions[str(task_id)] = {
-                    "x": float(raw_position.get("x", 0)),
-                    "y": float(raw_position.get("y", 0)),
-                }
+                x = float(raw_position.get("x", 0))
+                y = float(raw_position.get("y", 0))
+                if not math.isfinite(x) or not math.isfinite(y):
+                    continue
+                positions[str(task_id)] = {"x": x, "y": y}
             except (TypeError, ValueError):
                 continue
     raw_viewport = value.get("viewport", {})
     viewport = raw_viewport if isinstance(raw_viewport, dict) else {}
     try:
         zoom = min(2.0, max(0.25, float(viewport.get("zoom", 1))))
+        if not math.isfinite(zoom):
+            raise ValueError
     except (TypeError, ValueError):
         zoom = 1.0
     try:
         x = float(viewport.get("x", 0))
+        if not math.isfinite(x):
+            raise ValueError
     except (TypeError, ValueError):
         x = 0.0
     try:
         y = float(viewport.get("y", 0))
+        if not math.isfinite(y):
+            raise ValueError
     except (TypeError, ValueError):
         y = 0.0
     return {"positions": positions, "viewport": {"x": x, "y": y, "zoom": zoom}}

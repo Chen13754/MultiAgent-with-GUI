@@ -75,7 +75,7 @@ def test_config_editor_service_saves_json_documents_as_one_validated_bundle(tmp_
     service.save_config_payloads(agents, tasks)
 
     workflow = json.loads((tmp_path / "workflow.json").read_text(encoding="utf-8"))
-    assert workflow["schema_version"] == 1
+    assert workflow["schema_version"] == 2
     assert workflow["agents"][0]["id"] == "new_agent"
     assert workflow["tasks"][0]["agent_id"] == "new_agent"
 

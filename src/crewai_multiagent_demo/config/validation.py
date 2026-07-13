@@ -61,6 +61,9 @@ def validate_configs(agents: list[AgentConfig], tasks: list[TaskConfig]) -> None
         disabled_context = [task_id for task_id in task.context_task_ids if task_id in disabled_tasks]
         if disabled_context:
             raise ValueError(f"task '{task.id}' 依赖了已禁用的 task: {', '.join(disabled_context)}")
+        duplicate_context = _find_duplicates(task.context_task_ids)
+        if duplicate_context:
+            raise ValueError(f"task '{task.id}' 存在重复依赖: {', '.join(duplicate_context)}")
 
     _validate_no_cycles(tasks)
 

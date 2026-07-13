@@ -10,7 +10,7 @@ import type {
   TaskConfig
 } from "./types";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 type Listener<T> = (value: T) => void;
 type Unsubscribe = () => void;
 
@@ -20,8 +20,8 @@ export interface StudioBridge {
   cancelRun(): Promise<ApiResponse<{ accepted: boolean }>>;
   resetRun(): Promise<ApiResponse<RunState>>;
   validateConfig(): Promise<ApiResponse<{ text: string }>>;
-  saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]): Promise<ApiResponse<ConfigSnapshot>>;
-  saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[]): Promise<ApiResponse<ConfigSnapshot>>;
+  saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[], baseRevision?: string): Promise<ApiResponse<ConfigSnapshot>>;
+  saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[], baseRevision?: string): Promise<ApiResponse<ConfigSnapshot>>;
   saveGraph(graph: ConfigSnapshot["graph"], baseRevision?: string): Promise<ApiResponse<ConfigSnapshot>>;
   resetConfig(): Promise<ApiResponse<AppSnapshot>>;
   saveApiKey(key: string): Promise<ApiResponse<{ configured: boolean; envFile: string }>>;
@@ -55,23 +55,73 @@ function decode<T>(value: string): ApiResponse<T> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isGraphLayout(value: unknown): value is ConfigSnapshot["graph"] {
+  if (!isRecord(value) || !isRecord(value.positions) || !isRecord(value.viewport)) return false;
+  const viewport = value.viewport;
+  return typeof viewport.x === "number" && Number.isFinite(viewport.x)
+    && typeof viewport.y === "number" && Number.isFinite(viewport.y)
+    && typeof viewport.zoom === "number" && Number.isFinite(viewport.zoom)
+    && Object.values(value.positions).every((position) => isRecord(position)
+      && typeof position.x === "number" && Number.isFinite(position.x)
+      && typeof position.y === "number" && Number.isFinite(position.y));
+}
+
+function isConfigSnapshot(value: unknown): value is ConfigSnapshot {
+  if (!isRecord(value)) return false;
+  return Array.isArray(value.agents)
+    && Array.isArray(value.tasks)
+    && isGraphLayout(value.graph)
+    && typeof value.revision === "string"
+    && typeof value.agentsJson === "string"
+    && typeof value.tasksJson === "string"
+    && typeof value.enabledTaskCount === "number"
+    && typeof value.validationText === "string";
+}
+
+function isRunState(value: unknown): value is RunState {
+  if (!isRecord(value) || !Array.isArray(value.events) || !isRecord(value.taskStates)) return false;
+  return typeof value.status === "string" && typeof value.runId === "string"
+    && typeof value.progress === "number" && typeof value.modelAlias === "string"
+    && typeof value.topic === "string" && typeof value.taskCount === "number"
+    && typeof value.activeAgent === "string";
+}
+
+function isNotice(value: unknown): value is Notice {
+  return isRecord(value) && typeof value.kind === "string" && typeof value.message === "string";
+}
+
 function isAppSnapshot(value: unknown): value is AppSnapshot {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const row = value;
+  const config = row.config;
   return row.protocolVersion === PROTOCOL_VERSION
     && Array.isArray(row.models)
     && typeof row.defaultModel === "string"
-    && typeof row.config === "object"
+    && isConfigSnapshot(config)
     && Array.isArray(row.history)
-    && typeof row.runState === "object";
+    && isRunState(row.runState);
 }
 
-function subscribe<T>(signal: ChannelSignal, listener: Listener<T>): Unsubscribe {
+function subscribe<T>(signal: ChannelSignal, listener: Listener<T>, guard?: (value: unknown) => value is T): Unsubscribe {
   const callback = (json: string) => {
-    try { listener(JSON.parse(json) as T); } catch { /* A later full state can recover. */ }
+    try {
+      const value: unknown = JSON.parse(json);
+      if (!guard || guard(value)) listener(value as T);
+    } catch { /* A later full state can recover. */ }
   };
   signal.connect(callback);
   return () => signal.disconnect(callback);
+}
+
+function configResponse(response: ApiResponse<ConfigSnapshot>): ApiResponse<ConfigSnapshot> {
+  if (response.ok && !isConfigSnapshot(response.data)) {
+    return { ok: false, code: "protocol_mismatch", message: "桌面配置响应不符合当前协议。" };
+  }
+  return response;
 }
 
 class QtChannelBridge implements StudioBridge {
@@ -99,23 +149,23 @@ class QtChannelBridge implements StudioBridge {
   cancelRun() { return this.invoke<{ accepted: boolean }>("cancelRun"); }
   resetRun() { return this.invoke<RunState>("resetRun"); }
   validateConfig() { return this.invoke<{ text: string }>("validateConfig"); }
-  saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]) {
-    return this.invoke<ConfigSnapshot>("saveConfig", kind, JSON.stringify(payload));
+  saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[], baseRevision = "") {
+    return this.invoke<ConfigSnapshot>("saveConfig", kind, JSON.stringify(payload), baseRevision).then(configResponse);
   }
-  saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[]) {
-    return this.invoke<ConfigSnapshot>("saveConfigBundle", JSON.stringify(agents), JSON.stringify(tasks));
+  saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[], baseRevision = "") {
+    return this.invoke<ConfigSnapshot>("saveConfigBundle", JSON.stringify(agents), JSON.stringify(tasks), baseRevision).then(configResponse);
   }
   saveGraph(graph: ConfigSnapshot["graph"], baseRevision = "") {
-    return this.invoke<ConfigSnapshot>("saveGraph", JSON.stringify(graph), baseRevision);
+    return this.invoke<ConfigSnapshot>("saveGraph", JSON.stringify(graph), baseRevision).then(configResponse);
   }
   resetConfig() { return this.invoke<AppSnapshot>("resetConfig"); }
   saveApiKey(key: string) { return this.invoke<{ configured: boolean; envFile: string }>("saveApiKey", key); }
   exportDiagnostics() { return this.invoke<{ path: string }>("exportDiagnostics"); }
   loadHistory(id: string) { return this.invoke<HistoryDetail>("loadHistory", id); }
   openLocation(target: "outputs" | "history" | "config", id = "") { return this.invoke("openLocation", target, id); }
-  onRunState(listener: Listener<RunState>) { return subscribe(this.studio.runStateChanged, listener); }
-  onHistory(listener: Listener<HistoryItem[]>) { return subscribe(this.studio.historyChanged, listener); }
-  onNotice(listener: Listener<Notice>) { return subscribe(this.studio.noticeRaised, listener); }
+  onRunState(listener: Listener<RunState>) { return subscribe(this.studio.runStateChanged, listener, isRunState); }
+  onHistory(listener: Listener<HistoryItem[]>) { return subscribe(this.studio.historyChanged, listener, (value): value is HistoryItem[] => Array.isArray(value)); }
+  onNotice(listener: Listener<Notice>) { return subscribe(this.studio.noticeRaised, listener, isNotice); }
 }
 
 const demoAgents: AgentConfig[] = [
@@ -132,7 +182,7 @@ const demoGraph: ConfigSnapshot["graph"] = {
 };
 
 function initialState(): RunState {
-  return { status: "idle", runId: "", progress: 0, modelAlias: "flash", topic: "", taskCount: 2, activeAgent: "等待启动", events: [], result: null, error: null };
+  return { status: "idle", runId: "", progress: 0, modelAlias: "flash", topic: "", taskCount: 2, activeAgent: "等待启动", events: [], taskStates: {}, result: null, error: null };
 }
 
 class MockBridge implements StudioBridge {
@@ -172,8 +222,8 @@ class MockBridge implements StudioBridge {
   async cancelRun() { this.timers.forEach(window.clearTimeout); this.timers = []; this.state = { ...this.state, status: "cancelled", progress: 0 }; this.emitState(); return { ok: true, data: { accepted: true } }; }
   async resetRun() { this.state = initialState(); this.emitState(); return { ok: true, data: this.state }; }
   async validateConfig() { return { ok: true, data: { text: this.config().validationText } }; }
-  async saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]) { if (kind === "agents") this.agents = payload as AgentConfig[]; else this.tasks = payload as TaskConfig[]; return { ok: true, data: this.config() }; }
-  async saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[]) { this.agents = agents; this.tasks = tasks; return { ok: true, data: this.config() }; }
+  async saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[], _baseRevision = "") { if (kind === "agents") this.agents = payload as AgentConfig[]; else this.tasks = payload as TaskConfig[]; return { ok: true, data: this.config() }; }
+  async saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[], _baseRevision = "") { this.agents = agents; this.tasks = tasks; return { ok: true, data: this.config() }; }
   async saveGraph(graph: ConfigSnapshot["graph"], _baseRevision = "") { this.graph = graph; return { ok: true, data: this.config() }; }
   async resetConfig() { this.agents = demoAgents; this.tasks = demoTasks; this.graph = demoGraph; return { ok: true, data: this.snapshot() }; }
   async saveApiKey() { return { ok: true, data: { configured: true, envFile: "development/mock/.env" } }; }

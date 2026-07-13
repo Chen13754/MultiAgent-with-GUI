@@ -36,6 +36,8 @@ MODEL_VARIANT=flash
 CREWAI_STORAGE_DIR=.cache/crewai
 ```
 
+文件和工作流编排保存在本机，但运行时的主题、任务提示和上下文会发送到配置的 DeepSeek API；这不是离线推理服务，也不提供 Agent 自动发布、上传或操作电脑的工具。
+
 已由进程环境注入的变量优先于 `.env`。相对存储路径会解析为应用工作目录内的绝对路径。不要提交 `.env`、`.venv`、`.cache`、`outputs` 或 `dist`。
 
 ## CLI
@@ -97,7 +99,7 @@ Windows 构建完成后会在项目根目录生成 `MultiagentStudio.exe`。它�
 }
 ```
 
-`artifact_role` 可为 `none`、`full_report` 或 `summary`。配置页的“工作流画布”支持拖动节点、创建/删除依赖边；边会真正写回目标任务的 `context_task_ids`，节点位置保存到 `graph.positions`。完整报告和摘要通过角色选择，不依赖固定任务 ID 或数组位置。配置校验会检查空字段、重复 ID、无效 agent、禁用依赖、缺失依赖、依赖环和重复产物角色。
+`artifact_role` 可为 `none`、`full_report` 或 `summary`。配置页的“工作流画布”支持拖动节点、创建/删除依赖边；边会真正写回目标任务的 `context_task_ids`，节点位置和视口保存到 `graph`。完整报告和摘要通过角色选择，不依赖固定任务 ID 或数组位置。配置校验会检查空字段、重复 ID、重复依赖、无效 agent、禁用依赖、缺失依赖、依赖环和重复产物角色。
 
 ## 运行归档
 

@@ -15,6 +15,7 @@ from crewai_multiagent_demo.core.outputs import write_run_manifest
 from crewai_multiagent_demo.core.runner import run_workflow
 from crewai_multiagent_demo.domain.run_request import RunRequest
 from crewai_multiagent_demo.utils.environment import load_project_env
+from crewai_multiagent_demo.utils.files import atomic_write_text
 
 
 def _workflow_process_entry(request: RunRequest, event_queue: Any, result_queue: Any) -> None:
@@ -104,6 +105,9 @@ class WorkflowProcessWorker(QThread):
                 self.completed.emit(terminal[1])
             else:
                 payload = terminal[1] if terminal else {}
+                traceback_text = str(payload.get("traceback", "")) if isinstance(payload, dict) else ""
+                if traceback_text:
+                    write_process_trace(self.request, traceback_text)
                 self.failed.emit(str(payload.get("message", "工作流运行失败。")))
         finally:
             if process.is_alive():
@@ -145,3 +149,10 @@ def mark_interrupted_run(request: RunRequest, status: str, error: str) -> None:
             manifest = {}
     manifest.update({"run_id": request.run_id, "status": status, "error": error})
     write_run_manifest(run_dir, manifest)
+
+
+def write_process_trace(request: RunRequest, traceback_text: str) -> None:
+    candidates = sorted(Path(request.output_dir).glob(f"*_{request.run_id}"), reverse=True)
+    if not candidates:
+        return
+    atomic_write_text(candidates[0] / "process_error.txt", traceback_text[-20000:])

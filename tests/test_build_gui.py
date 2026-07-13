@@ -36,9 +36,13 @@ def test_prerequisite_check_does_not_require_prebuilt_frontend(tmp_path, monkeyp
     (project / "config" / "workflow.json").write_text("{}", encoding="utf-8")
     (project / "contracts").mkdir()
     (project / "contracts" / "studio.schema.json").write_text("{}", encoding="utf-8")
+    (project / "scripts").mkdir()
+    (project / "scripts" / "windows_launcher.cs").write_text("launcher", encoding="utf-8")
     monkeypatch.setattr(build_gui, "PROJECT_ROOT", project)
     monkeypatch.setattr(build_gui, "FRONTEND_DIST", project / "frontend" / "dist")
     monkeypatch.setattr(build_gui, "pnpm_command", lambda: ["pnpm"])
+    monkeypatch.setattr(build_gui, "WINDOWS_LAUNCHER_SOURCE", project / "scripts" / "windows_launcher.cs")
+    monkeypatch.setattr(build_gui, "windows_csharp_compiler", lambda: Path("csc.exe"))
 
     build_gui.check_prerequisites(require_frontend_dist=False)
     with pytest.raises(RuntimeError, match="dist.index.html"):
@@ -74,6 +78,7 @@ def test_windows_launcher_is_a_windowed_direct_entrypoint(tmp_path, monkeypatch)
     monkeypatch.setattr(build_gui, "PROJECT_ROOT", project)
     monkeypatch.setattr(build_gui, "WINDOWS_LAUNCHER_SOURCE", source)
     monkeypatch.setattr(build_gui, "windows_csharp_compiler", lambda: Path("csc.exe"))
+    monkeypatch.setattr(build_gui, "project_version", lambda: "0.2.0")
     monkeypatch.setattr(build_gui, "run", fake_run)
 
     launcher = build_gui.build_windows_launcher(bundle)
@@ -82,6 +87,18 @@ def test_windows_launcher_is_a_windowed_direct_entrypoint(tmp_path, monkeypatch)
     assert launcher.read_bytes() == b"launcher"
     assert "/target:winexe" in captured[0]
     assert "/reference:System.Windows.Forms.dll" in captured[0]
+    version_source = project / ".cache" / "build" / "launcher_version.cs"
+    assert version_source.read_text(encoding="utf-8").find('AssemblyVersion("0.2.0.0")') >= 0
+
+
+def test_windows_version_metadata_is_generated_from_project_version(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(build_gui, "PROJECT_ROOT", tmp_path)
+
+    path = build_gui.write_windows_version_file("0.2.0")
+
+    text = path.read_text(encoding="utf-8")
+    assert "filevers=(0, 2, 0, 0)" in text
+    assert "ProductVersion', u'0.2.0'" in text
 
 
 def test_pyinstaller_collects_crewai_translation_resources(monkeypatch) -> None:

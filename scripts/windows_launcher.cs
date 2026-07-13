@@ -8,8 +8,6 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Starts the packaged Multiagent Studio desktop application")]
 [assembly: AssemblyCompany("Multiagent Studio")]
 [assembly: AssemblyProduct("Multiagent Studio")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
 
 internal static class MultiagentStudioLauncher
 {

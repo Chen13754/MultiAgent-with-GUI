@@ -9,11 +9,12 @@ must have an expiry date. An expired exception fails CI and release builds.
 - Upstream issue: pre-authentication code injection in the ChromaDB FastAPI
   server's model-loading path.
 - Product exposure: Multiagent Studio does not start a ChromaDB server and does
-  not use CrewAI memory or knowledge. `memory=False` is explicit, and the
-  desktop packaging command excludes `chromadb`.
-- Residual exposure: the advanced-user CLI wheel environment still contains the
-  transitive dependency, so consumers must not enable ChromaDB server, memory,
-  or knowledge features from this application environment.
+  not use CrewAI memory or knowledge. `memory=False` is explicit. The current
+  desktop bundle still contains the transitive package because excluding it
+  breaks CrewAI's import graph during packaged startup.
+- Residual exposure: both the desktop bundle and the advanced-user CLI wheel
+  contain the transitive dependency, so consumers must not enable ChromaDB
+  server, memory, or knowledge features from this application environment.
 - Owner action: update CrewAI/ChromaDB and remove the exception as soon as an
   unaffected compatible release exists.
 - Expiry: 2026-08-15.

@@ -2,6 +2,8 @@
 
 export type RunStatus = "idle" | "running" | "succeeded" | "failed" | "cancelled";
 
+export type TaskStatus = "waiting" | "running" | "succeeded" | "failed" | "cancelled";
+
 export type ArtifactRole = "none" | "full_report" | "summary";
 
 export interface AgentConfig {
@@ -66,6 +68,7 @@ export interface RunState {
   taskCount: number;
   activeAgent: string;
   events: Array<Record<string, unknown>>;
+  taskStates: Record<string, TaskStatus>;
   result: RunResult | null;
   error: string | null;
 }

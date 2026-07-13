@@ -41,7 +41,7 @@ Business rules belong in `config/`, `core/`, `domain/`, or testable services. Re
 
 ## Desktop protocol
 
-The QWebChannel bootstrap response includes `protocolVersion`. TypeScript contracts are generated from `contracts/studio.schema.json` and validated at runtime. If a production page cannot reach QWebChannel, it shows a fatal backend error; `MockBridge` is compiled for development mode only.
+The QWebChannel bootstrap response uses protocol version 2. TypeScript contracts are generated from `contracts/studio.schema.json`; bootstrap snapshots are checked for the required graph, revision, and task-state fields at runtime. If a production page cannot reach QWebChannel or receives an incompatible payload, it shows a fatal backend error; `MockBridge` is compiled for development mode only.
 
 The host performs a real `studio.bootstrap()` call during smoke testing and verifies the protocol marker. A page rendering successfully is not sufficient evidence of backend connectivity.
 

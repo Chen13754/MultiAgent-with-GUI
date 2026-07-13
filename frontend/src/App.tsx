@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import ReactMarkdown from "react-markdown";
-import { Background, BackgroundVariant, Controls, ReactFlow, type Connection, type Edge, type Node, type NodeChange } from "@xyflow/react";
+import { Background, BackgroundVariant, Controls, ReactFlow, type Connection, type Edge, type Node, type NodeChange, type Viewport } from "@xyflow/react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 import { getBridge, type StudioBridge } from "./bridge";
-import type { AgentConfig, AppSnapshot, ConfigSnapshot, GraphLayout, HistoryDetail, HistoryItem, Notice, RunState, TaskConfig } from "./types";
+import type { AgentConfig, ApiResponse, AppSnapshot, ConfigSnapshot, GraphLayout, HistoryDetail, HistoryItem, Notice, RunState, TaskConfig } from "./types";
 
 type Page = "run" | "config" | "history";
 type ConfigTab = "graph" | "agents" | "tasks" | "json" | "validation";
@@ -50,6 +50,9 @@ function normaliseTasks(value: unknown): TaskConfig[] {
   if (!Array.isArray(value)) throw new Error("Tasks 顶层必须是数组。");
   return value.map((item) => {
     const task = item as Record<string, unknown>;
+    const artifactRole = task.artifact_role === undefined ? "none" : String(task.artifact_role);
+    if (!["none", "full_report", "summary"].includes(artifactRole)) throw new Error(`无效的 artifact_role：${artifactRole}`);
+    if (task.enabled !== undefined && typeof task.enabled !== "boolean") throw new Error("Tasks.enabled 必须是布尔值。");
     const context = task.context_task_ids;
     return {
       id: String(task.id ?? ""),
@@ -60,9 +63,7 @@ function normaliseTasks(value: unknown): TaskConfig[] {
       context_task_ids: Array.isArray(context)
         ? context.map(String).filter(Boolean)
         : String(context ?? "").split(",").map((part) => part.trim()).filter(Boolean),
-      artifact_role: (["none", "full_report", "summary"].includes(String(task.artifact_role))
-        ? String(task.artifact_role)
-        : "none") as TaskConfig["artifact_role"],
+      artifact_role: artifactRole as TaskConfig["artifact_role"],
       enabled: task.enabled !== false
     };
   });
@@ -88,6 +89,8 @@ function SectionHeading({ kicker, title, detail, action }: { kicker?: string; ti
 }
 
 function taskState(taskId: string, state: RunState): "waiting" | "running" | "succeeded" | "failed" | "cancelled" {
+  const persisted = state.taskStates[taskId];
+  if (persisted && persisted !== "waiting") return persisted;
   const events = state.events.filter((event) => String(event.task_id ?? "") === taskId);
   if (events.some((event) => event.type === "task_failed")) return "failed";
   if (events.some((event) => event.type === "task_cancelled")) return "cancelled";
@@ -96,15 +99,19 @@ function taskState(taskId: string, state: RunState): "waiting" | "running" | "su
   return "waiting";
 }
 
-function wouldCreateCycle(tasks: TaskConfig[], source: string, target: string): boolean {
+export function wouldCreateCycle(tasks: TaskConfig[], source: string, target: string): boolean {
   const next = new Map(tasks.map((task) => [task.id, task.context_task_ids]));
   const visit = (id: string, seen = new Set<string>()): boolean => {
-    if (id === source) return true;
+    if (id === target) return true;
     if (seen.has(id)) return false;
     seen.add(id);
     return (next.get(id) ?? []).some((dependency) => visit(dependency, seen));
   };
-  return visit(target);
+  return visit(source);
+}
+
+function edgeId(source: string, target: string): string {
+  return JSON.stringify([source, target]);
 }
 
 function WorkflowGraph({
@@ -144,7 +151,7 @@ function WorkflowGraph({
       const targetStatus = taskState(task.id, state);
       const live = sourceStatus === "running" || targetStatus === "running";
       return {
-        id: `${dependency}-${task.id}`,
+        id: edgeId(dependency, task.id),
         source: dependency,
         target: task.id,
         animated: live,
@@ -169,10 +176,10 @@ function WorkflowGraph({
   };
   const handleEdgesDelete = (deleted: Edge[]) => {
     if (!editable) return;
-    const removed = new Set(deleted.map((edge) => edge.id));
+    const removed = new Set(deleted.map((edge) => `${edge.source}\u0000${edge.target}`));
     onTasksChange?.(tasks.map((task) => ({
       ...task,
-      context_task_ids: task.context_task_ids.filter((dependency) => !removed.has(`${dependency}-${task.id}`))
+      context_task_ids: task.context_task_ids.filter((dependency) => !removed.has(`${dependency}\u0000${task.id}`))
     })));
   };
   const handleNodesChange = (changes: NodeChange[]) => {
@@ -187,9 +194,13 @@ function WorkflowGraph({
     if (!editable) return;
     onGraphChange?.({ ...graph, positions: { ...positions, [node.id]: node.position } });
   };
+  const handleMoveEnd = (_event: unknown, viewport: Viewport) => {
+    if (!editable) return;
+    onGraphChange?.({ ...graph, viewport: { x: viewport.x, y: viewport.y, zoom: viewport.zoom } });
+  };
 
   return <div className={`flow-shell ${editable ? "is-editable" : ""}`} aria-label={editable ? "可编辑工作流图" : "多 Agent 编排流程"}>
-    <ReactFlow nodes={nodes} edges={edges} fitView fitViewOptions={{ padding: 0.18 }} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable={editable} panOnDrag zoomOnScroll={editable} zoomOnPinch={editable} zoomOnDoubleClick={editable} onConnect={handleConnect} onEdgesDelete={handleEdgesDelete} onNodesChange={handleNodesChange} onNodeDragStop={handleNodeDragStop} deleteKeyCode={editable ? ["Backspace", "Delete"] : null} proOptions={{ hideAttribution: true }}>
+    <ReactFlow nodes={nodes} edges={edges} defaultViewport={graph.viewport} fitView={Object.keys(graph.positions).length === 0} fitViewOptions={{ padding: 0.18 }} nodesDraggable={editable} nodesConnectable={editable} elementsSelectable={editable} panOnDrag zoomOnScroll={editable} zoomOnPinch={editable} zoomOnDoubleClick={editable} onConnect={handleConnect} onEdgesDelete={handleEdgesDelete} onNodesChange={handleNodesChange} onNodeDragStop={handleNodeDragStop} onMoveEnd={handleMoveEnd} deleteKeyCode={editable ? ["Backspace", "Delete"] : null} proOptions={{ hideAttribution: true }}>
       <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="rgba(75, 86, 110, .22)" />
       <Controls showInteractive={editable} />
     </ReactFlow>
@@ -284,38 +295,59 @@ function ConfigPage({ snapshot, state, bridge, onConfig, onNotice }: { snapshot:
   const [graph, setGraph] = useState(snapshot.config.graph);
   const [apiKey, setApiKey] = useState("");
   const locked = state.status === "running";
+  const revisionRef = useRef(snapshot.config.revision);
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
 
-  useEffect(() => { setAgents(cloneAgents(snapshot.config.agents)); setTasks(cloneTasks(snapshot.config.tasks)); setAgentsJson(snapshot.config.agentsJson); setTasksJson(snapshot.config.tasksJson); setValidation(snapshot.config.validationText); setGraph(snapshot.config.graph); }, [snapshot.config]);
-  const save = async (kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]) => {
-    const response = await bridge.saveConfig(kind, payload);
-    if (!response.ok || !response.data) { onNotice({ kind: "error", message: response.message ?? "保存失败。" }); return; }
-    onConfig(response.data); onNotice({ kind: "success", message: `${kind === "agents" ? "Agents" : "Tasks"} 已保存。` });
+  useEffect(() => {
+    revisionRef.current = snapshot.config.revision;
+    setAgents(cloneAgents(snapshot.config.agents));
+    setTasks(cloneTasks(snapshot.config.tasks));
+    setAgentsJson(snapshot.config.agentsJson);
+    setTasksJson(snapshot.config.tasksJson);
+    setValidation(snapshot.config.validationText);
+    setGraph(snapshot.config.graph);
+  }, [snapshot.config]);
+  const enqueueSave = (operation: (revision: string) => Promise<ApiResponse<ConfigSnapshot>>, successMessage: string) => {
+    saveChainRef.current = saveChainRef.current.then(async () => {
+      try {
+        const response = await operation(revisionRef.current);
+        if (response.data) {
+          revisionRef.current = response.data.revision;
+          onConfig(response.data);
+        }
+        if (!response.ok) {
+          onNotice({ kind: "error", message: response.message ?? "保存失败；已重新读取当前配置。" });
+          return;
+        }
+        onNotice({ kind: "success", message: successMessage });
+      } catch (error) {
+        onNotice({ kind: "error", message: error instanceof Error ? error.message : "保存失败。" });
+      }
+    });
   };
-  const saveJson = async () => {
+  const save = (kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]) => {
+    enqueueSave((revision) => bridge.saveConfig(kind, payload, revision), `${kind === "agents" ? "Agents" : "Tasks"} 已保存。`);
+  };
+  const saveJson = () => {
     try {
       if (tab === "json") {
-        const response = await bridge.saveConfigBundle(JSON.parse(agentsJson) as AgentConfig[], normaliseTasks(JSON.parse(tasksJson)));
-        if (!response.ok || !response.data) { onNotice({ kind: "error", message: response.message ?? "保存失败。" }); return; }
-        onConfig(response.data);
-        onNotice({ kind: "success", message: "Agents 和 Tasks 已一起保存。" });
+        const parsedAgents = JSON.parse(agentsJson);
+        if (!Array.isArray(parsedAgents)) throw new Error("Agents 顶层必须是数组。");
+        const parsedTasks = normaliseTasks(JSON.parse(tasksJson));
+        enqueueSave((revision) => bridge.saveConfigBundle(parsedAgents as AgentConfig[], parsedTasks, revision), "Agents 和 Tasks 已一起保存。");
       }
     } catch (error) { onNotice({ kind: "error", message: error instanceof Error ? error.message : "JSON 格式错误。" }); }
   };
   const validate = async () => { const response = await bridge.validateConfig(); if (response.ok && response.data) { setValidation(response.data.text); onNotice({ kind: "success", message: "配置检查通过。" }); } else onNotice({ kind: "error", message: response.message ?? "配置检查失败。" }); };
   const saveKey = async () => { const response = await bridge.saveApiKey(apiKey); if (response.ok) { setApiKey(""); onNotice({ kind: "success", message: "API key 已保存到本地配置。" }); } else onNotice({ kind: "error", message: response.message ?? "API key 保存失败。" }); };
   const exportDiagnostics = async () => { const response = await bridge.exportDiagnostics(); if (response.ok) onNotice({ kind: "success", message: "诊断包已生成。" }); else onNotice({ kind: "error", message: response.message ?? "诊断包生成失败。" }); };
-  const saveGraph = async (nextGraph: GraphLayout) => {
+  const saveGraph = (nextGraph: GraphLayout) => {
     setGraph(nextGraph);
-    const response = await bridge.saveGraph(nextGraph, snapshot.config.revision);
-    if (!response.ok || !response.data) { onNotice({ kind: "error", message: response.message ?? "画布布局保存失败。" }); return; }
-    onConfig(response.data);
+    enqueueSave((revision) => bridge.saveGraph(nextGraph, revision), "画布布局已保存。");
   };
-  const saveGraphTasks = async (nextTasks: TaskConfig[]) => {
+  const saveGraphTasks = (nextTasks: TaskConfig[]) => {
     setTasks(nextTasks);
-    const response = await bridge.saveConfig("tasks", nextTasks);
-    if (!response.ok || !response.data) { onNotice({ kind: "error", message: response.message ?? "依赖关系保存失败。" }); return; }
-    onConfig(response.data);
-    onNotice({ kind: "success", message: "工作流依赖已同步到底层配置。" });
+    enqueueSave((revision) => bridge.saveConfig("tasks", nextTasks, revision), "工作流依赖已同步到底层配置。");
   };
 
   return <motion.main key="config" className="page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>

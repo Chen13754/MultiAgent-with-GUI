@@ -20,16 +20,32 @@ def create_diagnostics_archive(cache_dir: Path, output_dir: Path) -> Path:
             "frozen": bool(getattr(sys, "frozen", False)),
         }
         bundle.writestr("system.json", json.dumps(system, ensure_ascii=False, indent=2))
-        log_dir = cache_dir / "logs"
-        if log_dir.exists():
-            for log_file in log_dir.glob("*.log*"):
-                if log_file.is_file():
-                    bundle.write(log_file, f"logs/{log_file.name}")
         if output_dir.exists():
             run_dirs = sorted((path for path in output_dir.iterdir() if path.is_dir()), reverse=True)[:10]
             for run_dir in run_dirs:
-                for name in ("run.json", "events.json", "run_metadata.md"):
-                    source = run_dir / name
-                    if source.exists():
-                        bundle.write(source, f"runs/{run_dir.name}/{name}")
+                manifest_file = run_dir / "run.json"
+                if not manifest_file.exists():
+                    continue
+                try:
+                    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    continue
+                safe_manifest = {
+                    key: manifest.get(key)
+                    for key in (
+                        "schema_version",
+                        "run_id",
+                        "status",
+                        "model_alias",
+                        "model_name",
+                        "crewai_model",
+                        "elapsed_seconds",
+                        "config_revision",
+                    )
+                    if key in manifest
+                }
+                bundle.writestr(
+                    f"runs/{run_dir.name}/manifest.json",
+                    json.dumps(safe_manifest, ensure_ascii=False, indent=2),
+                )
     return archive
