@@ -16,6 +16,7 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 FRONTEND_DIST = FRONTEND_DIR / "dist"
 PYTHON = Path(sys.executable)
 WINDOWS_VERSION_FILE = PROJECT_ROOT / "scripts" / "windows_version_info.txt"
+WINDOWS_LAUNCHER_SOURCE = PROJECT_ROOT / "scripts" / "windows_launcher.cs"
 
 
 def run(command: list[str], *, cwd: Path = PROJECT_ROOT) -> None:
@@ -64,6 +65,59 @@ def write_checksum(path: Path) -> Path:
     checksum = path.with_suffix(path.suffix + ".sha256")
     checksum.write_text(f"{digest}  {path.name}\n", encoding="utf-8")
     return checksum
+
+
+def windows_csharp_compiler() -> Path:
+    configured = os.getenv("CSC_PATH")
+    candidates = [
+        Path(configured) if configured else None,
+        Path(os.environ.get("WINDIR", r"C:\Windows"))
+        / "Microsoft.NET"
+        / "Framework64"
+        / "v4.0.30319"
+        / "csc.exe",
+        Path(os.environ.get("WINDIR", r"C:\Windows"))
+        / "Microsoft.NET"
+        / "Framework"
+        / "v4.0.30319"
+        / "csc.exe",
+    ]
+    for candidate in candidates:
+        if candidate is not None and candidate.is_file():
+            return candidate
+    discovered = shutil.which("csc")
+    if discovered:
+        return Path(discovered)
+    raise RuntimeError(
+        "The Windows C# compiler was not found. Set CSC_PATH to csc.exe to build the desktop launcher."
+    )
+
+
+def build_windows_launcher(bundle: Path) -> Path | None:
+    if platform.system() != "Windows":
+        return None
+    packaged_executable = bundle / "MultiagentStudio.exe"
+    if not packaged_executable.is_file():
+        raise RuntimeError(f"Packaged executable is missing: {packaged_executable}")
+    if not WINDOWS_LAUNCHER_SOURCE.is_file():
+        raise RuntimeError(f"Windows launcher source is missing: {WINDOWS_LAUNCHER_SOURCE}")
+
+    launcher = PROJECT_ROOT / "MultiagentStudio.exe"
+    run(
+        [
+            str(windows_csharp_compiler()),
+            "/nologo",
+            "/target:winexe",
+            "/optimize+",
+            "/codepage:65001",
+            "/reference:System.Windows.Forms.dll",
+            f"/out:{launcher}",
+            str(WINDOWS_LAUNCHER_SOURCE),
+        ]
+    )
+    if not launcher.is_file():
+        raise RuntimeError(f"Windows launcher was not produced: {launcher}")
+    return launcher
 
 
 def project_version() -> str:
@@ -227,10 +281,13 @@ def main(argv: list[str] | None = None) -> int:
         encoding="utf-8",
     )
     sign_and_notarize_bundle(bundle)
+    launcher = build_windows_launcher(bundle)
     archive = make_archive(bundle)
     checksum = write_checksum(archive)
     print(f"Portable bundle ready: {archive}")
     print(f"SHA-256 ready: {checksum}")
+    if launcher is not None:
+        print(f"Double-click launcher ready: {launcher}")
     return 0
 
 

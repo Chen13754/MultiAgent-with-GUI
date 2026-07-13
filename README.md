@@ -64,9 +64,9 @@ $env:MULTIAGENT_HOME="$PWD\.cache\desktop-home"
 ```powershell
 .\.venv\Scripts\python.exe .\scripts\build_gui.py --check
 .\build-gui.ps1
-# 启动最新 dist 包，避免误开历史根目录 EXE
-.\launch-studio.ps1 -Wait
 ```
+
+Windows 构建完成后会在项目根目录生成 `MultiagentStudio.exe`。它是无控制台窗口的原生启动入口，直接双击即可打开当前 `dist\MultiagentStudio` 桌面包，不需要运行 PowerShell 脚本。如果正式桌面包缺失，启动器会显示中文错误和需要检查的路径。
 
 构建脚本先生成前端，再运行 PyInstaller，最后生成平台归档和 SHA-256 校验文件。GitHub Actions 构建 Windows x64、Linux x64、macOS x64 和 macOS arm64。对外 GUI 只应使用经过 packaged smoke、签名/公证和校验的桌面包。
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts import build_gui
@@ -51,6 +53,35 @@ def test_tagged_windows_release_cannot_skip_signing(tmp_path, monkeypatch) -> No
 
     with pytest.raises(RuntimeError, match="signing credentials"):
         build_gui.sign_and_notarize_bundle(tmp_path)
+
+
+def test_windows_launcher_is_a_windowed_direct_entrypoint(tmp_path, monkeypatch) -> None:
+    project = tmp_path
+    bundle = project / "dist" / "MultiagentStudio"
+    bundle.mkdir(parents=True)
+    (bundle / "MultiagentStudio.exe").write_bytes(b"packaged-app")
+    source = project / "scripts" / "windows_launcher.cs"
+    source.parent.mkdir()
+    source.write_text("launcher source", encoding="utf-8")
+    captured: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd=project) -> None:
+        captured.append(command)
+        output_argument = next(part for part in command if part.startswith("/out:"))
+        Path(output_argument.removeprefix("/out:")).write_bytes(b"launcher")
+
+    monkeypatch.setattr(build_gui.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(build_gui, "PROJECT_ROOT", project)
+    monkeypatch.setattr(build_gui, "WINDOWS_LAUNCHER_SOURCE", source)
+    monkeypatch.setattr(build_gui, "windows_csharp_compiler", lambda: Path("csc.exe"))
+    monkeypatch.setattr(build_gui, "run", fake_run)
+
+    launcher = build_gui.build_windows_launcher(bundle)
+
+    assert launcher == project / "MultiagentStudio.exe"
+    assert launcher.read_bytes() == b"launcher"
+    assert "/target:winexe" in captured[0]
+    assert "/reference:System.Windows.Forms.dll" in captured[0]
 
 
 def test_pyinstaller_collects_crewai_translation_resources(monkeypatch) -> None:

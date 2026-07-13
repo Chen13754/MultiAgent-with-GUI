@@ -12,7 +12,7 @@
 - 移除错误的 `--exclude-module chromadb`，修复 CrewAI 导入链在 packaged E2E 中的 `No module named 'chromadb'`。
 - 前端构建在 prerequisite 检查之后执行，干净 checkout 可直接构建。
 - 发行物写入版本、目标平台和 checksum；版本更新为 `0.2.0`。
-- 根目录旧 EXE 已移入 `.cache/legacy-bundle/20260604`，新增 `launch-studio.ps1` 只启动最新 `dist` 包。
+- 根目录旧 EXE 已移入 `.cache/legacy-bundle/20260604`；构建流程现在生成一个轻量、无控制台窗口的根目录 `MultiagentStudio.exe`，可直接双击并只启动最新 `dist` 桌面包。
 
 ### 工作流结构与运行一致性
 
