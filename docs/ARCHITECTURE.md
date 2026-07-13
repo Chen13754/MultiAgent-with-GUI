@@ -7,7 +7,7 @@ Multiagent Studio is a local CrewAI desktop/CLI application. The supported GUI s
 1. The entrypoint creates a writable application workspace and seeds immutable defaults.
 2. `.env` is loaded without overriding injected environment variables; storage paths are normalized to writable absolute paths.
 3. `ConfigLoader` reads versioned `workflow.json`, or atomically migrates the legacy two-file configuration with backups.
-4. The GUI creates an immutable `RunRequest` carrying run ID, topic, model, config/output directories, timeouts, and retry limits.
+4. The GUI creates an immutable `RunRequest` carrying run ID, topic, model, the validated `AppConfig` snapshot, its revision, config/output directories, timeouts, and retry limits.
 5. `WorkflowProcessWorker` starts an isolated child process. The GUI can request cancellation; after the grace period it terminates and then kills the child if required.
 6. `core.runner` validates, executes, and persists the state machine and outputs. Every failure path attempts to leave a diagnostic manifest without masking the original error.
 7. History reads `run.json` as its authoritative source, with a legacy Markdown fallback only for old runs.
@@ -30,7 +30,9 @@ Business rules belong in `config/`, `core/`, `domain/`, or testable services. Re
 
 ## Persistence contracts
 
-- `workflow.json` and `run.json` carry `schema_version`.
+- `workflow.json` (schema 2) and `run.json` carry `schema_version`; schema 1 remains readable for legacy migration.
+- `workflow.json.graph.positions` stores presentation layout only. Task topology remains authoritative in `tasks[*].context_task_ids`.
+- `run.json.config_revision` records the exact configuration revision accepted for that run; a child process never re-reads a newer UI draft.
 - Configuration, event lists, and manifests use temporary files plus atomic replacement.
 - A run directory name combines UTC time and a UUID; creation is atomic and safe under concurrent starts.
 - `artifact_role` selects full and concise reports independently of task IDs.

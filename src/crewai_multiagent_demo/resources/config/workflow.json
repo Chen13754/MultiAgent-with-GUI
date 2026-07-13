@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "agents": [
     {
       "id": "problem_analyst",
@@ -71,5 +71,14 @@
       "artifact_role": "summary",
       "enabled": true
     }
-  ]
+  ],
+  "graph": {
+    "positions": {
+      "analysis": {"x": 40, "y": 120},
+      "solution": {"x": 300, "y": 72},
+      "review": {"x": 560, "y": 120},
+      "summary": {"x": 820, "y": 72}
+    },
+    "viewport": {"x": 0, "y": 0, "zoom": 1}
+  }
 }

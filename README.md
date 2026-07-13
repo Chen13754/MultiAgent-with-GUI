@@ -64,6 +64,8 @@ $env:MULTIAGENT_HOME="$PWD\.cache\desktop-home"
 ```powershell
 .\.venv\Scripts\python.exe .\scripts\build_gui.py --check
 .\build-gui.ps1
+# 启动最新 dist 包，避免误开历史根目录 EXE
+.\launch-studio.ps1 -Wait
 ```
 
 构建脚本先生成前端，再运行 PyInstaller，最后生成平台归档和 SHA-256 校验文件。GitHub Actions 构建 Windows x64、Linux x64、macOS x64 和 macOS arm64。对外 GUI 只应使用经过 packaged smoke、签名/公证和校验的桌面包。
@@ -74,7 +76,7 @@ $env:MULTIAGENT_HOME="$PWD\.cache\desktop-home"
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "agents": [],
   "tasks": [
     {
@@ -87,11 +89,15 @@ $env:MULTIAGENT_HOME="$PWD\.cache\desktop-home"
       "artifact_role": "full_report",
       "enabled": true
     }
-  ]
+  ],
+  "graph": {
+    "positions": {"review": {"x": 320, "y": 80}},
+    "viewport": {"x": 0, "y": 0, "zoom": 1}
+  }
 }
 ```
 
-`artifact_role` 可为 `none`、`full_report` 或 `summary`。完整报告和摘要通过角色选择，不依赖固定任务 ID 或数组位置。配置校验会检查空字段、重复 ID、无效 agent、禁用依赖、缺失依赖、依赖环和重复产物角色。
+`artifact_role` 可为 `none`、`full_report` 或 `summary`。配置页的“工作流画布”支持拖动节点、创建/删除依赖边；边会真正写回目标任务的 `context_task_ids`，节点位置保存到 `graph.positions`。完整报告和摘要通过角色选择，不依赖固定任务 ID 或数组位置。配置校验会检查空字段、重复 ID、无效 agent、禁用依赖、缺失依赖、依赖环和重复产物角色。
 
 ## 运行归档
 
@@ -120,3 +126,5 @@ corepack pnpm --dir frontend run test
 依赖安全例外必须有明确范围和到期日，见 `docs/SECURITY_EXCEPTIONS.md`。发布流水线还生成 CycloneDX SBOM、版本信息、平台归档与 checksum。
 
 更详细的边界和扩展规则见 `docs/ARCHITECTURE.md`。
+
+本轮产品化整改与验证证据见 `docs/PRODUCT_AUDIT_IMPLEMENTATION_REPORT.md`。

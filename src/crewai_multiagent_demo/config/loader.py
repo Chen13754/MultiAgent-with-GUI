@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ class AppConfig:
     agents: list[AgentConfig]
     tasks: list[TaskConfig]
     schema_version: int = WORKFLOW_SCHEMA_VERSION
+    graph: dict[str, Any] | None = None
 
 
 class ConfigLoader:
@@ -47,6 +49,7 @@ class ConfigLoader:
             agents=agents,
             tasks=tasks,
             schema_version=int(document.get("schema_version", WORKFLOW_SCHEMA_VERSION)),
+            graph=_normalise_graph(document.get("graph")),
         )
 
     def load_agents(self) -> list[AgentConfig]:
@@ -70,15 +73,30 @@ class ConfigLoader:
 
     def save_workflow(self, agents: list[AgentConfig], tasks: list[TaskConfig]) -> None:
         validate_configs(agents, tasks)
-        self.save_workflow_payloads(config_to_dicts(agents), config_to_dicts(tasks))
+        graph = self.load(validate=False).graph if self.workflow_file.exists() else None
+        self.save_workflow_payloads(config_to_dicts(agents), config_to_dicts(tasks), graph=graph)
 
-    def save_workflow_payloads(self, agents_payload: list[dict[str, Any]], tasks_payload: list[dict[str, Any]]) -> None:
+    def save_workflow_payloads(
+        self,
+        agents_payload: list[dict[str, Any]],
+        tasks_payload: list[dict[str, Any]],
+        *,
+        graph: dict[str, Any] | None = None,
+    ) -> None:
         document = {
-            "schema_version": WORKFLOW_SCHEMA_VERSION,
+            "schema_version": 2 if graph else WORKFLOW_SCHEMA_VERSION,
             "agents": agents_payload,
             "tasks": tasks_payload,
         }
+        if graph:
+            document["graph"] = _normalise_graph(graph)
         atomic_write_json(self.workflow_file, document)
+
+    def revision(self) -> str:
+        """Return a stable revision for optimistic UI saves and run snapshots."""
+        document = self._load_document()
+        canonical = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
     def _load_document(self) -> dict[str, Any]:
         if self.workflow_file.exists():
@@ -86,7 +104,7 @@ class ConfigLoader:
             if not isinstance(data, dict):
                 raise ValueError(f"{self.workflow_file} 顶层必须是对象")
             version = data.get("schema_version", WORKFLOW_SCHEMA_VERSION)
-            if version != WORKFLOW_SCHEMA_VERSION:
+            if version not in {1, 2}:
                 raise ValueError(f"不支持的 workflow schema_version: {version}")
             return data
 
@@ -106,3 +124,36 @@ class ConfigLoader:
     @staticmethod
     def save_json_file(path: Path, data: Any) -> None:
         atomic_write_json(path, data)
+
+
+def _normalise_graph(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"positions": {}, "viewport": {"x": 0, "y": 0, "zoom": 1}}
+    raw_positions = value.get("positions", {})
+    positions: dict[str, dict[str, float]] = {}
+    if isinstance(raw_positions, dict):
+        for task_id, raw_position in raw_positions.items():
+            if not isinstance(raw_position, dict):
+                continue
+            try:
+                positions[str(task_id)] = {
+                    "x": float(raw_position.get("x", 0)),
+                    "y": float(raw_position.get("y", 0)),
+                }
+            except (TypeError, ValueError):
+                continue
+    raw_viewport = value.get("viewport", {})
+    viewport = raw_viewport if isinstance(raw_viewport, dict) else {}
+    try:
+        zoom = min(2.0, max(0.25, float(viewport.get("zoom", 1))))
+    except (TypeError, ValueError):
+        zoom = 1.0
+    try:
+        x = float(viewport.get("x", 0))
+    except (TypeError, ValueError):
+        x = 0.0
+    try:
+        y = float(viewport.get("y", 0))
+    except (TypeError, ValueError):
+        y = 0.0
+    return {"positions": positions, "viewport": {"x": x, "y": y, "zoom": zoom}}

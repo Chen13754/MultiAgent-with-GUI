@@ -51,3 +51,22 @@ def test_tagged_windows_release_cannot_skip_signing(tmp_path, monkeypatch) -> No
 
     with pytest.raises(RuntimeError, match="signing credentials"):
         build_gui.sign_and_notarize_bundle(tmp_path)
+
+
+def test_pyinstaller_collects_crewai_translation_resources(monkeypatch) -> None:
+    captured: list[list[str]] = []
+    monkeypatch.setattr(build_gui, "run", lambda command, cwd=build_gui.PROJECT_ROOT: captured.append(command))
+    monkeypatch.setattr(build_gui, "check_prerequisites", lambda **_: None)
+    monkeypatch.setattr(build_gui, "pnpm_command", lambda: ["pnpm"])
+    monkeypatch.setattr(build_gui, "sign_and_notarize_bundle", lambda bundle: None)
+    monkeypatch.setattr(build_gui, "make_archive", lambda bundle: bundle.with_suffix(".zip"))
+    monkeypatch.setattr(build_gui, "write_checksum", lambda archive: archive.with_suffix(".sha256"))
+    monkeypatch.setattr(build_gui, "project_version", lambda: "test")
+    monkeypatch.setattr(build_gui.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(build_gui, "FRONTEND_DIST", build_gui.PROJECT_ROOT / ".cache" / "missing-dist")
+
+    # The assertion is intentionally source-level: it guards the command that
+    # produces the packaged executable without running a heavyweight build.
+    source = (build_gui.PROJECT_ROOT / "scripts" / "build_gui.py").read_text(encoding="utf-8")
+    assert '"crewai"' in source
+    assert '"--exclude-module"' not in source or '"chromadb"' not in source

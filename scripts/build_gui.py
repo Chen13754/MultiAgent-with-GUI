@@ -207,8 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             "PySide6.QtWebChannel",
             "--collect-data",
             "crewai_multiagent_demo",
-            "--exclude-module",
-            "chromadb",
+            "--collect-data",
+            "crewai",
             "src/web_gui_app.py",
         ]
     if os.name == "nt":

@@ -57,6 +57,8 @@ class InlineWorkflowWorker(QThread):
                 model_alias=self.request.model_alias,
                 config_dir=self.request.config_dir,
                 output_dir=self.request.output_dir,
+                app_config=self.request.app_config,
+                config_revision=self.request.config_revision,
                 run_id=self.request.run_id,
                 request_timeout_seconds=self.request.request_timeout_seconds,
                 max_retries=self.request.max_retries,
@@ -130,7 +132,7 @@ class StudioBridge(QObject):
             return self._json(self._response(ok=False, code="run_active", message="工作流正在运行。"))
         try:
             model = self._registry.resolve(model_alias)
-            self.config_service.validate_current_config()
+            config = self.config_service.validate_current_config()
         except Exception as exc:
             return self._json(self._response(ok=False, code="invalid_config", message=str(exc)))
         if not self._api_key_checker(model.crewai_model):
@@ -145,6 +147,8 @@ class StudioBridge(QObject):
             config_dir=self.config_service.config_dir,
             output_dir=self.output_dir,
             env_file=self.env_file,
+            app_config=config,
+            config_revision=self.config_service.load_snapshot().revision,
         )
         self._events = []
         self._last_result = None
@@ -227,6 +231,28 @@ class StudioBridge(QObject):
             return self._json(self._response(ok=False, code="run_active", message="运行中不能修改配置。"))
         try:
             self.config_service.save_config_payloads(json.loads(agents_json), json.loads(tasks_json))
+        except Exception as exc:
+            return self._json(self._response(ok=False, code="save_failed", message=str(exc)))
+        return self._json(self._response(data=self._config_snapshot()))
+
+    @Slot(str, result=str)
+    @Slot(str, str, result=str)
+    def saveGraph(self, graph_json: str, base_revision: str = "") -> str:  # noqa: N802
+        """Persist canvas layout without allowing the UI to invent a new topology."""
+        if self.is_running():
+            return self._json(self._response(ok=False, code="run_active", message="运行中不能修改工作流图。"))
+        try:
+            current = self.config_service.load_snapshot()
+            if base_revision and base_revision != current.revision:
+                return self._json(
+                    self._response(
+                        ok=False,
+                        code="config_conflict",
+                        message="配置已被其他窗口修改，请重新读取后再保存画布。",
+                        data=self._config_snapshot(),
+                    )
+                )
+            self.config_service.save_graph_payload(json.loads(graph_json))
         except Exception as exc:
             return self._json(self._response(ok=False, code="save_failed", message=str(exc)))
         return self._json(self._response(data=self._config_snapshot()))
@@ -388,6 +414,8 @@ class StudioBridge(QObject):
         return {
             "agents": snapshot.agents,
             "tasks": snapshot.tasks,
+            "graph": snapshot.graph,
+            "revision": snapshot.revision,
             "agentsJson": snapshot.agents_json,
             "tasksJson": snapshot.tasks_json,
             "enabledTaskCount": snapshot.enabled_task_count,

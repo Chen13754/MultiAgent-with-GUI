@@ -22,6 +22,7 @@ export interface StudioBridge {
   validateConfig(): Promise<ApiResponse<{ text: string }>>;
   saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]): Promise<ApiResponse<ConfigSnapshot>>;
   saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[]): Promise<ApiResponse<ConfigSnapshot>>;
+  saveGraph(graph: ConfigSnapshot["graph"], baseRevision?: string): Promise<ApiResponse<ConfigSnapshot>>;
   resetConfig(): Promise<ApiResponse<AppSnapshot>>;
   saveApiKey(key: string): Promise<ApiResponse<{ configured: boolean; envFile: string }>>;
   exportDiagnostics(): Promise<ApiResponse<{ path: string }>>;
@@ -104,6 +105,9 @@ class QtChannelBridge implements StudioBridge {
   saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[]) {
     return this.invoke<ConfigSnapshot>("saveConfigBundle", JSON.stringify(agents), JSON.stringify(tasks));
   }
+  saveGraph(graph: ConfigSnapshot["graph"], baseRevision = "") {
+    return this.invoke<ConfigSnapshot>("saveGraph", JSON.stringify(graph), baseRevision);
+  }
   resetConfig() { return this.invoke<AppSnapshot>("resetConfig"); }
   saveApiKey(key: string) { return this.invoke<{ configured: boolean; envFile: string }>("saveApiKey", key); }
   exportDiagnostics() { return this.invoke<{ path: string }>("exportDiagnostics"); }
@@ -122,6 +126,10 @@ const demoTasks: TaskConfig[] = [
   { id: "analysis", name: "问题分析", description: "分析 {topic}", expected_output: "结构化分析", agent_id: "problem_analyst", context_task_ids: [], artifact_role: "full_report", enabled: true },
   { id: "summary", name: "精简总结", description: "总结结果", expected_output: "精简报告", agent_id: "solution_strategist", context_task_ids: ["analysis"], artifact_role: "summary", enabled: true }
 ];
+const demoGraph: ConfigSnapshot["graph"] = {
+  positions: { analysis: { x: 40, y: 90 }, summary: { x: 310, y: 90 } },
+  viewport: { x: 0, y: 0, zoom: 1 }
+};
 
 function initialState(): RunState {
   return { status: "idle", runId: "", progress: 0, modelAlias: "flash", topic: "", taskCount: 2, activeAgent: "等待启动", events: [], result: null, error: null };
@@ -132,11 +140,12 @@ class MockBridge implements StudioBridge {
   private history: HistoryItem[] = [];
   private agents = demoAgents;
   private tasks = demoTasks;
+  private graph = demoGraph;
   private stateListeners = new Set<Listener<RunState>>();
   private historyListeners = new Set<Listener<HistoryItem[]>>();
   private noticeListeners = new Set<Listener<Notice>>();
   private timers: number[] = [];
-  private config(): ConfigSnapshot { return { agents: this.agents, tasks: this.tasks, agentsJson: JSON.stringify(this.agents, null, 2), tasksJson: JSON.stringify(this.tasks, null, 2), enabledTaskCount: this.tasks.filter((task) => task.enabled).length, validationText: "开发模式模拟配置。" }; }
+  private config(): ConfigSnapshot { return { agents: this.agents, tasks: this.tasks, graph: this.graph, revision: "demo", agentsJson: JSON.stringify(this.agents, null, 2), tasksJson: JSON.stringify(this.tasks, null, 2), enabledTaskCount: this.tasks.filter((task) => task.enabled).length, validationText: "开发模式模拟配置。" }; }
   private snapshot(): AppSnapshot { return { protocolVersion: PROTOCOL_VERSION, models: ["flash", "pro"], defaultModel: "flash", apiKeyConfigured: { flash: true, pro: true }, configPath: "development/mock", envFile: "development/mock/.env", config: this.config(), history: this.history, runState: this.state }; }
   private emitState() { this.stateListeners.forEach((listener) => listener({ ...this.state })); }
   private emitHistory() { this.historyListeners.forEach((listener) => listener([...this.history])); }
@@ -165,7 +174,8 @@ class MockBridge implements StudioBridge {
   async validateConfig() { return { ok: true, data: { text: this.config().validationText } }; }
   async saveConfig(kind: "agents" | "tasks", payload: AgentConfig[] | TaskConfig[]) { if (kind === "agents") this.agents = payload as AgentConfig[]; else this.tasks = payload as TaskConfig[]; return { ok: true, data: this.config() }; }
   async saveConfigBundle(agents: AgentConfig[], tasks: TaskConfig[]) { this.agents = agents; this.tasks = tasks; return { ok: true, data: this.config() }; }
-  async resetConfig() { this.agents = demoAgents; this.tasks = demoTasks; return { ok: true, data: this.snapshot() }; }
+  async saveGraph(graph: ConfigSnapshot["graph"], _baseRevision = "") { this.graph = graph; return { ok: true, data: this.config() }; }
+  async resetConfig() { this.agents = demoAgents; this.tasks = demoTasks; this.graph = demoGraph; return { ok: true, data: this.snapshot() }; }
   async saveApiKey() { return { ok: true, data: { configured: true, envFile: "development/mock/.env" } }; }
   async exportDiagnostics() { return { ok: true, data: { path: "development/mock/diagnostics.zip" } }; }
   async loadHistory(id: string) { return { ok: true, data: { id, summary: "模拟摘要", fullReport: "# 模拟报告", metadata: "开发模式" } }; }
@@ -184,6 +194,7 @@ class UnavailableBridge implements StudioBridge {
   validateConfig() { return this.error<{ text: string }>(); }
   saveConfig() { return this.error<ConfigSnapshot>(); }
   saveConfigBundle() { return this.error<ConfigSnapshot>(); }
+  saveGraph() { return this.error<ConfigSnapshot>(); }
   resetConfig() { return this.error<AppSnapshot>(); }
   saveApiKey() { return this.error<{ configured: boolean; envFile: string }>(); }
   exportDiagnostics() { return this.error<{ path: string }>(); }

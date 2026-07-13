@@ -20,6 +20,7 @@ def build_crew(
 ):
     configure_runtime_environment()
     from crewai import LLM, Agent, Crew, Process, Task
+    from crewai.events import TaskCompletedEvent, TaskFailedEvent, TaskStartedEvent, crewai_event_bus
 
     validate_configs(agents_config, tasks_config)
 
@@ -56,25 +57,50 @@ def build_crew(
         task_by_id[task_config.id] = task
         tasks.append(task)
 
-    completed_index = 0
+    handlers: list[tuple[type[object], object]] = []
 
-    def task_callback(task_output: object) -> None:
-        nonlocal completed_index
-        if on_event is None:
-            return
-        config = ordered_configs[completed_index] if completed_index < len(ordered_configs) else None
-        completed_index += 1
-        on_event(
-            {
-                "type": "task_completed",
-                "task_id": config.id if config else "",
-                "task_name": config.name if config else "",
-                "agent": getattr(task_output, "agent", ""),
-                "output": task_output_text(task_output),
-            }
-        )
+    def config_for_event(event: object) -> TaskConfig | None:
+        task_object = getattr(event, "task", None)
+        if task_object is not None and id(task_object) in {id(task): task_id for task_id, task in task_by_id.items()}:
+            task_object_id = id(task_object)
+            for task_id, candidate in task_by_id.items():
+                if id(candidate) == task_object_id:
+                    return next((item for item in ordered_configs if item.id == task_id), None)
+        name = str(getattr(event, "task_name", "") or "")
+        return next((item for item in ordered_configs if item.name == name), None)
 
-    return Crew(
+    def register(event_type: type[object], event_handler: object) -> None:
+        crewai_event_bus.on(event_type)(event_handler)
+        handlers.append((event_type, event_handler))
+
+    if on_event is not None:
+        def emit_task_event(event: object, *, event_type: str, output: str = "", error: str = "") -> None:
+            config = config_for_event(event)
+            on_event(
+                {
+                    "type": event_type,
+                    "task_id": config.id if config else str(getattr(event, "task_id", "") or ""),
+                    "task_name": config.name if config else str(getattr(event, "task_name", "") or ""),
+                    "agent": str(getattr(event, "agent_role", "") or getattr(event, "agent_id", "") or ""),
+                    **({"output": output} if output else {}),
+                    **({"error": error} if error else {}),
+                }
+            )
+
+        def started(_source: object, event: TaskStartedEvent) -> None:
+            emit_task_event(event, event_type="task_started")
+
+        def completed(_source: object, event: TaskCompletedEvent) -> None:
+            emit_task_event(event, event_type="task_completed", output=task_output_text(event.output))
+
+        def failed(_source: object, event: TaskFailedEvent) -> None:
+            emit_task_event(event, event_type="task_failed", error=str(event.error))
+
+        register(TaskStartedEvent, started)
+        register(TaskCompletedEvent, completed)
+        register(TaskFailedEvent, failed)
+
+    crew = Crew(
         agents=list(agent_by_id.values()),
         tasks=tasks,
         process=Process.sequential,
@@ -82,5 +108,10 @@ def build_crew(
         # ChromaDB-backed feature explicitly disabled at the product boundary.
         memory=False,
         verbose=True,
-        task_callback=task_callback,
     )
+    def cleanup() -> None:
+        for event_type, handler in handlers:
+            crewai_event_bus.off(event_type, handler)
+
+    crew._studio_event_cleanup = cleanup
+    return crew

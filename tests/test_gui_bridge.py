@@ -65,8 +65,47 @@ def test_bridge_bootstrap_and_save_keep_task_schema(tmp_path) -> None:
     saved = response(bridge.saveConfig("tasks", json.dumps(config["tasks"])))
     assert saved["ok"] is True
     persisted = json.loads((config_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 2
     assert persisted["tasks"][0]["name"] == "Updated analysis"
     assert persisted["tasks"][0]["agent_id"] == "analyst"
+
+
+def test_bridge_persists_canvas_layout_as_workflow_data(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    write_config(config_dir)
+    bridge = StudioBridge(config_dir=config_dir, output_dir=tmp_path / "outputs", api_key_checker=lambda _model: True)
+
+    graph = {"positions": {"analysis": {"x": 240, "y": 80}}, "viewport": {"x": 1, "y": 2, "zoom": 1.1}}
+    saved = response(bridge.saveGraph(json.dumps(graph)))
+
+    assert saved["ok"] is True
+    persisted = json.loads((config_dir / "workflow.json").read_text(encoding="utf-8"))
+    assert persisted["graph"]["positions"]["analysis"]["x"] == 240
+    assert response(bridge.bootstrap())["data"]["config"]["graph"]["viewport"]["zoom"] == 1.1
+
+
+def test_bridge_rejects_stale_canvas_revision(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    write_config(config_dir)
+    bridge = StudioBridge(config_dir=config_dir, output_dir=tmp_path / "outputs", api_key_checker=lambda _model: True)
+    current = response(bridge.bootstrap())["data"]["config"]
+
+    first = response(
+        bridge.saveGraph(
+            json.dumps({"positions": {}, "viewport": {"x": 0, "y": 0, "zoom": 1}}),
+            current["revision"],
+        )
+    )
+    assert first["ok"] is True
+    stale = response(
+        bridge.saveGraph(
+            json.dumps({"positions": {}, "viewport": {"x": 4, "y": 4, "zoom": 1}}),
+            current["revision"],
+        )
+    )
+
+    assert stale["ok"] is False
+    assert stale["code"] == "config_conflict"
 
 
 def test_bridge_reports_missing_api_key_without_starting_worker(tmp_path) -> None:
@@ -157,6 +196,8 @@ def test_bridge_streams_fake_workflow_result(tmp_path) -> None:
     assert state["result"]["summary"] == "summary"
     assert received["config_dir"] == config_dir
     assert received["output_dir"] == output_dir
+    assert received["app_config"].tasks[0].id == "analysis"
+    assert received["config_revision"]
     assert received["run_id"] == state["runId"]
 
 

@@ -110,6 +110,7 @@ def run_workflow(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
     on_event: EventCallback | None = None,
     app_config: AppConfig | None = None,
+    config_revision: str | None = None,
     registry: ModelRegistry = MODEL_REGISTRY,
     run_id: str | None = None,
     request_timeout_seconds: float = 180.0,
@@ -123,6 +124,7 @@ def run_workflow(
         "status": "created",
         "topic": resolved_topic,
         "model_alias": model_alias or "",
+        "config_revision": config_revision or "",
         "elapsed_seconds": 0.0,
         "error": None,
         "artifacts": {},
@@ -166,7 +168,12 @@ def run_workflow(
             request_timeout_seconds=request_timeout_seconds,
             max_retries=max_retries,
         )
-        result = crew.kickoff(inputs={"topic": resolved_topic})
+        try:
+            result = crew.kickoff(inputs={"topic": resolved_topic})
+        finally:
+            cleanup = getattr(crew, "_studio_event_cleanup", None)
+            if callable(cleanup):
+                cleanup()
         elapsed_seconds = perf_counter() - started_at
         token_usage = extract_token_usage(result, crew)
         task_outputs = collect_task_outputs(result, config.tasks)

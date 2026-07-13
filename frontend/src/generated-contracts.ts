@@ -23,6 +23,22 @@ export interface TaskConfig {
   enabled: boolean;
 }
 
+export interface GraphPosition {
+  x: number;
+  y: number;
+}
+
+export interface GraphViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface GraphLayout {
+  positions: Record<string, GraphPosition>;
+  viewport: GraphViewport;
+}
+
 export interface TaskOutput {
   agent?: string;
   task_id?: string;
@@ -57,6 +73,8 @@ export interface RunState {
 export interface ConfigSnapshot {
   agents: Array<AgentConfig>;
   tasks: Array<TaskConfig>;
+  graph: GraphLayout;
+  revision: string;
   agentsJson: string;
   tasksJson: string;
   enabledTaskCount: number;

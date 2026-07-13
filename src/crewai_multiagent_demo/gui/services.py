@@ -22,6 +22,8 @@ class ConfigEditorSnapshot:
     tasks_json: str
     enabled_task_count: int
     validation_text: str
+    graph: dict[str, Any]
+    revision: str
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,8 @@ class ConfigEditorService:
             tasks_json=json.dumps(tasks, ensure_ascii=False, indent=2),
             enabled_task_count=max(1, sum(1 for task in config.tasks if task.enabled)),
             validation_text=self._validation_text(config),
+            graph=config.graph or {"positions": {}, "viewport": {"x": 0, "y": 0, "zoom": 1}},
+            revision=self.loader.revision(),
         )
 
     def enabled_task_count(self) -> int:
@@ -102,6 +106,16 @@ class ConfigEditorService:
         tasks = [parse_task_config(item, index) for index, item in enumerate(tasks_payload)]
         validate_configs(agents, tasks)
         self.loader.save_workflow(agents, tasks)
+
+    def save_graph_payload(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("graph 顶层必须是对象")
+        config = self.loader.load(validate=True)
+        self.loader.save_workflow_payloads(
+            config_to_dicts(config.agents),
+            config_to_dicts(config.tasks),
+            graph=payload,
+        )
 
     @staticmethod
     def parse_json_payload(text: str, label: str) -> Any:

@@ -25,6 +25,24 @@
         "artifact_role": {"$ref": "#/$defs/ArtifactRole"}, "enabled": {"type": "boolean"}
       }
     },
+    "GraphPosition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}}
+    },
+    "GraphViewport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "zoom"],
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "zoom": {"type": "number"}}
+    },
+    "GraphLayout": {
+      "type": "object", "additionalProperties": false,
+      "required": ["positions", "viewport"],
+      "properties": {
+        "positions": {"type": "object", "additionalProperties": {"$ref": "#/$defs/GraphPosition"}},
+        "viewport": {"$ref": "#/$defs/GraphViewport"}
+      }
+    },
     "TaskOutput": {
       "type": "object",
       "required": ["output"],
@@ -55,10 +73,11 @@
     },
     "ConfigSnapshot": {
       "type": "object",
-      "required": ["agents", "tasks", "agentsJson", "tasksJson", "enabledTaskCount", "validationText"],
+      "required": ["agents", "tasks", "graph", "revision", "agentsJson", "tasksJson", "enabledTaskCount", "validationText"],
       "properties": {
         "agents": {"type": "array", "items": {"$ref": "#/$defs/AgentConfig"}},
         "tasks": {"type": "array", "items": {"$ref": "#/$defs/TaskConfig"}},
+        "graph": {"$ref": "#/$defs/GraphLayout"}, "revision": {"type": "string"},
         "agentsJson": {"type": "string"}, "tasksJson": {"type": "string"},
         "enabledTaskCount": {"type": "number"}, "validationText": {"type": "string"}
       }

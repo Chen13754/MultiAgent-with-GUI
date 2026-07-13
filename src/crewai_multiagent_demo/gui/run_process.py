@@ -25,6 +25,8 @@ def _workflow_process_entry(request: RunRequest, event_queue: Any, result_queue:
             model_alias=request.model_alias,
             config_dir=request.config_dir,
             output_dir=request.output_dir,
+            app_config=request.app_config,
+            config_revision=request.config_revision,
             run_id=request.run_id,
             request_timeout_seconds=request.request_timeout_seconds,
             max_retries=request.max_retries,
@@ -53,7 +55,7 @@ class WorkflowProcessWorker(QThread):
         super().__init__()
         self.request = request
         self._cancel_requested = Event()
-        self._process: multiprocessing.Process | None = None
+        self._process: Any = None
 
     def request_cancel(self) -> None:
         self._cancel_requested.set()
@@ -119,7 +121,7 @@ class WorkflowProcessWorker(QThread):
                 return
 
     @staticmethod
-    def _stop_process(process: multiprocessing.Process) -> None:
+    def _stop_process(process: Any) -> None:
         if not process.is_alive():
             return
         process.terminate()
