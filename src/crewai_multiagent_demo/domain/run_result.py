@@ -17,4 +17,6 @@ class RunResult:
     full_report: str
     concise_report: str
     task_outputs: list[dict[str, str]]
+    run_id: str = ""
+    status: str = "succeeded"
     events: list[dict[str, Any]] = field(default_factory=list)

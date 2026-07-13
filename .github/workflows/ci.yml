@@ -6,8 +6,19 @@ on:
   pull_request:
 
 jobs:
-  test:
-    runs-on: windows-latest
+  quality:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+          - name: Linux x64
+            os: ubuntu-24.04
+          - name: macOS Intel
+            os: macos-15-intel
 
     steps:
       - name: Checkout
@@ -18,15 +29,55 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements.lock
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --require-hashes -r requirements.lock
+          pnpm --dir frontend install --frozen-lockfile
 
       - name: Compile
-        run: python -m compileall -q src tests
+        run: |
+          python -m compileall -q src tests scripts
+          python scripts/generate_contract_types.py --check
 
-      - name: Test
-        run: python -m pytest
+      - name: Test Python
+        run: |
+          python -m ruff check src tests scripts
+          python -m mypy src/crewai_multiagent_demo/config src/crewai_multiagent_demo/core src/crewai_multiagent_demo/domain src/crewai_multiagent_demo/llm src/crewai_multiagent_demo/utils
+          python -m pytest --cov --cov-report=term-missing -q
+          python scripts/audit_dependencies.py
+
+      - name: Test frontend
+        run: |
+          pnpm --dir frontend run build
+          pnpm --dir frontend run test
+
+      - name: Smoke test desktop host
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_CHROMIUM_FLAGS: --no-sandbox --disable-gpu
+          MULTIAGENT_HOME: ${{ github.workspace }}/.cache/ci-home
+        run: python src/web_gui_app.py --smoke-test
+
+      - name: Verify wheel installation
+        shell: bash
+        env:
+          MULTIAGENT_HOME: ${{ github.workspace }}/.cache/wheel-home
+        run: |
+          python -m pip wheel --no-deps --wheel-dir .cache/wheel .
+          python -m pip install --no-deps --force-reinstall .cache/wheel/*.whl
+          cd "${RUNNER_TEMP}"
+          python -c "from crewai_multiagent_demo.cli import main; main(['validate'])"

@@ -11,4 +11,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+/.coverage
 *.egg-info/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo

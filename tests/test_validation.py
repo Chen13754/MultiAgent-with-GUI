@@ -51,3 +51,8 @@ def test_validation_rejects_disabled_dependency() -> None:
 def test_validation_rejects_cycles() -> None:
     with pytest.raises(ValueError, match="循环依赖"):
         validate_configs([agent()], [task("a", deps=["b"]), task("b", deps=["a"])])
+
+
+def test_validation_rejects_duplicate_dependencies() -> None:
+    with pytest.raises(ValueError, match="重复依赖"):
+        validate_configs([agent()], [task("a"), task("b", deps=["a", "a"])])

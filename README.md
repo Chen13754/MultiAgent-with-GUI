@@ -1,251 +1,132 @@
-# CrewAI 多 Agent 通用问题解决框架
+# Multiagent Studio
 
-这是一个基于 CrewAI 的多 Agent 通用问题解决应用。项目已经从单文件 demo 重构为可维护的 Python 包，支持 CLI、PySide6 桌面 GUI、JSON 配置、运行输出归档、事件记录和基础测试。
+Multiagent Studio 是一个基于 CrewAI 的本地多 Agent 桌面应用与高级用户 CLI。它通过可配置 DAG 完成问题分析、方案设计、评审和摘要，并为每次运行保存版本化、可诊断的归档。
 
-默认工作流包含 4 个角色：
+当前支持的正式 GUI 是 React + PySide6/Qt WebEngine 桌面包。GUI 不通过 wheel 分发；wheel 只提供 `multiagent-demo` CLI。
 
-- `Problem Analyst`：拆解问题背景、目标、约束、关键矛盾和成功标准
-- `Solution Strategist`：基于分析设计可执行方案
-- `Critical Reviewer`：评审方案并生成完整正式报告
-- `Executive Summarizer`：生成 500 字以内的精简报告
+## 主要能力
 
-## 目录结构
+- 单一、版本化的 `workflow.json` 配置，首次启动可迁移旧 `agents.json`/`tasks.json`。
+- 前端按任务依赖动态绘制工作流，不假定固定任务数量或 ID。
+- 独立子进程执行工作流，支持取消、请求超时、总运行超时和受限重试。
+- UUID 运行目录、原子配置/事件/manifest 写入和统一运行状态机。
+- `run.json`、Markdown 报告、逐任务输出、事件记录和脱敏诊断包。
+- 首次 API key 设置、损坏配置恢复和生产 Bridge 协议校验。
 
-```text
-src/
-  crewai_multiagent_demo/
-    cli.py
-    core/
-      crew_builder.py
-      events.py
-      outputs.py
-      runner.py
-      workflow.py
-    config/
-      loader.py
-      schema.py
-      validation.py
-    domain/
-      agents.py
-      tasks.py
-      run_result.py
-    llm/
-      model_registry.py
-      provider.py
-    gui/
-      pages.py
-      services.py
-      state.py
-      styles.py
-      widgets.py
-    utils/
-      environment.py
-      paths.py
-  main.py
-  gui_app.py
-config/
-  agents.json
-  tasks.json
-tests/
-```
+## 本地开发环境
 
-`src/main.py` 和 `src/gui_app.py` 是入口；核心业务逻辑在 `crewai_multiagent_demo` 包内。架构分层、扩展点和验证命令见 `docs/ARCHITECTURE.md`。
-
-## 本地环境
-
-为了不污染全局环境，建议把虚拟环境、pip 缓存、CrewAI 缓存和输出都放在项目目录内。
+依赖、缓存和构建产物应留在项目目录内：
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
 $env:PIP_CACHE_DIR="$PWD\.cache\pip"
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-复制环境变量模板：
-
-```powershell
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
+corepack pnpm --dir frontend install --frozen-lockfile --store-dir .\.cache\pnpm-store
 Copy-Item .env.template .env
 ```
 
-编辑 `.env`：
+也可安装较宽松的开发依赖声明，但可复现验证和发布必须使用 `requirements.lock`。
+
+`.env` 至少需要：
 
 ```text
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 MODEL_VARIANT=flash
 CREWAI_STORAGE_DIR=.cache/crewai
-CREWAI_DISABLE_TELEMETRY=true
-CREWAI_TRACING_ENABLED=false
-CREWAI_TESTING=true
-OTEL_SDK_DISABLED=true
 ```
 
-不要提交 `.env`、`.venv`、`.cache` 或 `outputs`。
+文件和工作流编排保存在本机，但运行时的主题、任务提示和上下文会发送到配置的 DeepSeek API；这不是离线推理服务，也不提供 Agent 自动发布、上传或操作电脑的工具。
+
+已由进程环境注入的变量优先于 `.env`。相对存储路径会解析为应用工作目录内的绝对路径。不要提交 `.env`、`.venv`、`.cache`、`outputs` 或 `dist`。
 
 ## CLI
 
-校验配置，不调用模型：
-
 ```powershell
 .\.venv\Scripts\python.exe .\src\main.py validate
-```
-
-列出模型档位：
-
-```powershell
 .\.venv\Scripts\python.exe .\src\main.py list-models
-```
-
-列出当前启用的 agents/tasks：
-
-```powershell
 .\.venv\Scripts\python.exe .\src\main.py list-config
+.\.venv\Scripts\python.exe .\src\main.py run --model flash "如何降低软件交付延期风险？"
 ```
 
-运行默认主题：
+安装 wheel 后可使用相同参数调用 `multiagent-demo`。安装版会把默认配置复制到用户应用目录；也可以设置 `MULTIAGENT_HOME` 指向明确的可写工作目录。
+
+## 桌面应用
+
+源码启动：
 
 ```powershell
-.\.venv\Scripts\python.exe .\src\main.py run
+corepack pnpm --dir frontend run build
+$env:MULTIAGENT_HOME="$PWD\.cache\desktop-home"
+.\.venv\Scripts\python.exe .\src\web_gui_app.py
 ```
 
-运行自定义主题和模型档位：
+构建当前平台桌面包：
 
 ```powershell
-.\.venv\Scripts\python.exe .\src\main.py run --model flash "如何降低一个小团队的软件交付延期风险？"
-.\.venv\Scripts\python.exe .\src\main.py run --model pro "如何设计一个企业内部 AI Agent 平台？"
-```
-
-可选参数：
-
-```powershell
-.\.venv\Scripts\python.exe .\src\main.py run --config-dir .\config --output-dir .\outputs --model flash "你的主题"
-```
-
-旧用法仍兼容：
-
-```powershell
-.\.venv\Scripts\python.exe .\src\main.py --model flash "你的主题"
-```
-
-也可以使用 PowerShell 脚本：
-
-```powershell
-.\run.ps1 -Model flash "你的主题"
-```
-
-## 桌面 GUI
-
-桌面 GUI 的用户入口只保留 Windows 可执行文件。首次使用或代码更新后，先在项目目录内构建：
-
-```powershell
+.\.venv\Scripts\python.exe .\scripts\build_gui.py --check
 .\build-gui.ps1
 ```
 
-构建完成后启动：
+Windows 构建完成后会在项目根目录生成 `MultiagentStudio.exe`。它是无控制台窗口的原生启动入口，直接双击即可打开当前 `dist\MultiagentStudio` 桌面包，不需要运行 PowerShell 脚本。如果正式桌面包缺失，启动器会显示中文错误和需要检查的路径。
 
-```powershell
-.\MultiagentStudio.exe
-```
+构建脚本先生成前端，再运行 PyInstaller，最后生成平台归档和 SHA-256 校验文件。GitHub Actions 构建 Windows x64、Linux x64、macOS x64 和 macOS arm64。对外 GUI 只应使用经过 packaged smoke、签名/公证和校验的桌面包。
 
-桌面 GUI 支持运行工作流、查看事件和输出、编辑 `agents.json` / `tasks.json`、校验配置、查看历史输出。GUI 层只负责交互展示，实际运行调用 `core.runner.run_workflow`。
+## 工作流配置
 
-`build-gui.ps1` 使用项目内 `.venv` 和 `.cache` 完成打包，避免污染全局 Python 环境。构建脚本会把 `MultiagentStudio.exe` 和运行依赖目录 `_internal/` 放到项目根目录；用户只需要启动 `MultiagentStudio.exe`。
-
-## 配置 Agent 和 Task
-
-默认配置文件就是示例配置：
-
-- `config/agents.json`
-- `config/tasks.json`
-
-Agent 字段：
+配置源为 `config/workflow.json`：
 
 ```json
 {
-  "id": "problem_analyst",
-  "role": "Problem Analyst",
-  "goal": "把模糊问题拆成清晰结构。",
-  "backstory": "角色背景。",
-  "enabled": true
+  "schema_version": 2,
+  "agents": [],
+  "tasks": [
+    {
+      "id": "review",
+      "name": "评审成稿",
+      "description": "...",
+      "expected_output": "...",
+      "agent_id": "critical_reviewer",
+      "context_task_ids": ["solution"],
+      "artifact_role": "full_report",
+      "enabled": true
+    }
+  ],
+  "graph": {
+    "positions": {"review": {"x": 320, "y": 80}},
+    "viewport": {"x": 0, "y": 0, "zoom": 1}
+  }
 }
 ```
 
-Task 字段：
+`artifact_role` 可为 `none`、`full_report` 或 `summary`。配置页的“工作流画布”支持拖动节点、创建/删除依赖边；边会真正写回目标任务的 `context_task_ids`，节点位置和视口保存到 `graph`。完整报告和摘要通过角色选择，不依赖固定任务 ID 或数组位置。配置校验会检查空字段、重复 ID、重复依赖、无效 agent、禁用依赖、缺失依赖、依赖环和重复产物角色。
 
-```json
-{
-  "id": "analysis",
-  "name": "问题分析",
-  "description": "围绕主题《{topic}》做分析。",
-  "expected_output": "结构化中文问题分析。",
-  "agent_id": "problem_analyst",
-  "context_task_ids": [],
-  "enabled": true
-}
-```
+## 运行归档
 
-添加新 task 时：
+每次运行创建带 UUID 的目录，包含：
 
-1. 在 `agents.json` 中确认存在可用的 `agent_id`。
-2. 在 `tasks.json` 中新增 task。
-3. 用 `context_task_ids` 声明依赖的上游 task。
-4. 运行 `validate` 检查配置。
+- `run.json`：带 `schema_version` 的权威 manifest 和状态；
+- `full_report.md`、`summary_report.md`、`run_metadata.md`；
+- `events.json`：包含 `run_id`、`task_id` 的公开运行事件；
+- `tasks/`：逐任务输出。
 
-配置校验会检查重复 id、空字段、不存在或未启用的 agent、缺失 task、禁用 task 被依赖、循环依赖等问题。
+状态统一为 `created → preflight → running → persisting → succeeded`，失败、取消和子进程中断分别记录为 `failed`、`cancelled`、`interrupted`。历史页优先读取 `run.json`，只对旧归档保留 Markdown 兼容解析。
 
-## 输出文件
-
-每次运行都会在 `outputs/` 下创建时间戳目录，例如：
-
-```text
-outputs/20260515_142030/
-```
-
-包含：
-
-- `full_report.md`
-- `summary_report.md`
-- `run_metadata.md`
-- `events.json`
-- `tasks/` 下每个 task 的单独输出
-
-`events.json` 只记录公开运行事件和任务输出，不伪造或保存隐藏推理链。
-
-## 模型档位
-
-模型档位定义在 `src/crewai_multiagent_demo/llm/model_registry.py`。
-
-默认档位：
-
-- `flash` -> `deepseek-v4-flash`
-- `pro` -> `deepseek-v4-pro`
-
-CrewAI/LiteLLM 使用时会自动加上 `deepseek/` provider 前缀。
-
-添加新档位时，在 `ModelRegistry` 默认模型表中增加一个 `ModelSpec` 即可。
-
-## 测试
-
-测试只覆盖纯逻辑，不调用 LLM：
+## 质量与发布门槛
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m compileall -q src tests scripts
+.\.venv\Scripts\python.exe -m ruff check src tests scripts
+.\.venv\Scripts\python.exe -m mypy src/crewai_multiagent_demo/config src/crewai_multiagent_demo/core src/crewai_multiagent_demo/domain src/crewai_multiagent_demo/llm src/crewai_multiagent_demo/utils
+.\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing -q
+.\.venv\Scripts\python.exe scripts\generate_contract_types.py --check
+.\.venv\Scripts\python.exe scripts\audit_dependencies.py
+corepack pnpm --dir frontend run build
+corepack pnpm --dir frontend run test
 ```
 
-当前覆盖：
+依赖安全例外必须有明确范围和到期日，见 `docs/SECURITY_EXCEPTIONS.md`。发布流水线还生成 CycloneDX SBOM、版本信息、平台归档与 checksum。
 
-- config loader
-- config validation
-- model alias/model name 解析
-- output directory creation
-- event writing
-- task outputs 和 run metadata writing
+更详细的边界和扩展规则见 `docs/ARCHITECTURE.md`。
 
-## 扩展点
-
-- 新 LLM provider 或模型档位：扩展 `llm/model_registry.py`
-- 新输出格式：扩展 `core/outputs.py`
-- 新运行模式：扩展 `cli.py` 和 `core/runner.py`
-- 新 GUI 页面：扩展 `src/gui_app.py`，保持业务逻辑调用 core 层
-- 新 agent/task：修改 JSON 配置后运行 `validate`
+本轮产品化整改与验证证据见 `docs/PRODUCT_AUDIT_IMPLEMENTATION_REPORT.md`。

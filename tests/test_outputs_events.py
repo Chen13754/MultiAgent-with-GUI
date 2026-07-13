@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from crewai_multiagent_demo.core.events import EventEmitter, write_event_log
 from crewai_multiagent_demo.core.outputs import create_output_run_dir, write_run_metadata, write_task_outputs
@@ -13,6 +14,15 @@ def test_output_directory_creation_is_unique(tmp_path) -> None:
     assert first.exists()
     assert second.exists()
     assert first != second
+
+
+def test_output_directory_creation_is_safe_under_concurrency(tmp_path) -> None:
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        paths = list(pool.map(lambda _: create_output_run_dir(tmp_path), range(64)))
+
+    assert len(paths) == 64
+    assert len(set(paths)) == 64
+    assert all(path.exists() for path in paths)
 
 
 def test_event_writing(tmp_path) -> None:

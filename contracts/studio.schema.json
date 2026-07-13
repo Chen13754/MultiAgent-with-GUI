@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://multiagent.local/contracts/studio.schema.json",
+  "title": "Multiagent Studio Bridge Contract",
+  "$defs": {
+    "RunStatus": {"type": "string", "enum": ["idle", "running", "succeeded", "failed", "cancelled"]},
+    "TaskStatus": {"type": "string", "enum": ["waiting", "running", "succeeded", "failed", "cancelled"]},
+    "ArtifactRole": {"type": "string", "enum": ["none", "full_report", "summary"]},
+    "AgentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "goal", "backstory", "enabled"],
+      "properties": {
+        "id": {"type": "string"}, "role": {"type": "string"}, "goal": {"type": "string"},
+        "backstory": {"type": "string"}, "enabled": {"type": "boolean"}
+      }
+    },
+    "TaskConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "description", "expected_output", "agent_id", "context_task_ids", "artifact_role", "enabled"],
+      "properties": {
+        "id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"},
+        "expected_output": {"type": "string"}, "agent_id": {"type": "string"},
+        "context_task_ids": {"type": "array", "items": {"type": "string"}},
+        "artifact_role": {"$ref": "#/$defs/ArtifactRole"}, "enabled": {"type": "boolean"}
+      }
+    },
+    "GraphPosition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}}
+    },
+    "GraphViewport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "zoom"],
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "zoom": {"type": "number"}}
+    },
+    "GraphLayout": {
+      "type": "object", "additionalProperties": false,
+      "required": ["positions", "viewport"],
+      "properties": {
+        "positions": {"type": "object", "additionalProperties": {"$ref": "#/$defs/GraphPosition"}},
+        "viewport": {"$ref": "#/$defs/GraphViewport"}
+      }
+    },
+    "TaskOutput": {
+      "type": "object",
+      "required": ["output"],
+      "properties": {
+        "agent": {"type": "string"}, "task_id": {"type": "string"}, "task_name": {"type": "string"},
+        "artifact_role": {"$ref": "#/$defs/ArtifactRole"}, "description": {"type": "string"}, "output": {"type": "string"}
+      }
+    },
+    "RunResult": {
+      "type": "object",
+      "required": ["historyId", "modelAlias", "elapsedSeconds", "summary", "fullReport", "taskOutputs"],
+      "properties": {
+        "historyId": {"type": "string"}, "modelAlias": {"type": "string"}, "elapsedSeconds": {"type": "number"},
+        "summary": {"type": "string"}, "fullReport": {"type": "string"},
+        "taskOutputs": {"type": "array", "items": {"$ref": "#/$defs/TaskOutput"}}
+      }
+    },
+    "RunState": {
+      "type": "object",
+      "required": ["status", "runId", "progress", "modelAlias", "topic", "taskCount", "activeAgent", "events", "taskStates", "result", "error"],
+      "properties": {
+        "status": {"$ref": "#/$defs/RunStatus"}, "runId": {"type": "string"}, "progress": {"type": "number"},
+        "modelAlias": {"type": "string"}, "topic": {"type": "string"}, "taskCount": {"type": "number"},
+        "activeAgent": {"type": "string"}, "events": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "taskStates": {"type": "object", "additionalProperties": {"$ref": "#/$defs/TaskStatus"}},
+        "result": {"anyOf": [{"$ref": "#/$defs/RunResult"}, {"type": "null"}]},
+        "error": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "ConfigSnapshot": {
+      "type": "object",
+      "required": ["agents", "tasks", "graph", "revision", "agentsJson", "tasksJson", "enabledTaskCount", "validationText"],
+      "properties": {
+        "agents": {"type": "array", "items": {"$ref": "#/$defs/AgentConfig"}},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/TaskConfig"}},
+        "graph": {"$ref": "#/$defs/GraphLayout"}, "revision": {"type": "string"},
+        "agentsJson": {"type": "string"}, "tasksJson": {"type": "string"},
+        "enabledTaskCount": {"type": "number"}, "validationText": {"type": "string"}
+      }
+    },
+    "HistoryStatus": {"type": "string", "enum": ["succeeded", "failed", "cancelled", "interrupted"]},
+    "HistoryItem": {
+      "type": "object",
+      "required": ["id", "createdAt", "modelAlias", "elapsedSeconds", "status"],
+      "properties": {
+        "id": {"type": "string"}, "runId": {"type": "string"}, "createdAt": {"type": "string"},
+        "modelAlias": {"type": "string"}, "elapsedSeconds": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        "status": {"$ref": "#/$defs/HistoryStatus"}
+      }
+    },
+    "HistoryDetail": {
+      "type": "object", "required": ["id", "summary", "fullReport", "metadata"],
+      "properties": {"id": {"type": "string"}, "summary": {"type": "string"}, "fullReport": {"type": "string"}, "metadata": {"type": "string"}}
+    },
+    "AppSnapshot": {
+      "type": "object",
+      "required": ["protocolVersion", "models", "defaultModel", "apiKeyConfigured", "configPath", "envFile", "config", "history", "runState"],
+      "properties": {
+        "protocolVersion": {"type": "number"}, "models": {"type": "array", "items": {"type": "string"}},
+        "defaultModel": {"type": "string"}, "apiKeyConfigured": {"type": "object", "additionalProperties": {"type": "boolean"}},
+        "configPath": {"type": "string"}, "envFile": {"type": "string"},
+        "config": {"$ref": "#/$defs/ConfigSnapshot"}, "history": {"type": "array", "items": {"$ref": "#/$defs/HistoryItem"}},
+        "runState": {"$ref": "#/$defs/RunState"}
+      }
+    },
+    "Notice": {
+      "type": "object", "required": ["kind", "message"],
+      "properties": {"kind": {"type": "string", "enum": ["success", "error", "warning", "info"]}, "message": {"type": "string"}}
+    }
+  }
+}

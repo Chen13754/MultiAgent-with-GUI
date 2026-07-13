@@ -8,7 +8,7 @@ from crewai_multiagent_demo.config.loader import ConfigLoader
 from crewai_multiagent_demo.core.runner import DEFAULT_TOPIC, run_workflow
 from crewai_multiagent_demo.llm.model_registry import MODEL_REGISTRY
 from crewai_multiagent_demo.utils.environment import load_project_env
-from crewai_multiagent_demo.utils.paths import DEFAULT_CONFIG_DIR, DEFAULT_OUTPUT_DIR, PROJECT_ROOT
+from crewai_multiagent_demo.utils.paths import DEFAULT_CONFIG_DIR, DEFAULT_OUTPUT_DIR, ensure_cli_workspace
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,7 +55,8 @@ def _normalize_legacy_args(argv: list[str] | None) -> list[str] | None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    load_project_env(PROJECT_ROOT / ".env")
+    workspace = ensure_cli_workspace()
+    load_project_env(workspace.env_file)
     parser = build_parser()
     if argv is None:
         argv = sys.argv[1:]

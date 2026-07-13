@@ -36,6 +36,8 @@ def _optional_bool(item: dict[str, Any], field: str, *, kind: str, index: int, d
 
 
 def parse_agent_config(item: dict[str, Any], index: int) -> AgentConfig:
+    if not isinstance(item, dict):
+        raise ValueError(f"agent[{index}] 必须是对象")
     return AgentConfig(
         id=_required_str(item, "id", kind="agent", index=index),
         role=_required_str(item, "role", kind="agent", index=index),
@@ -46,6 +48,8 @@ def parse_agent_config(item: dict[str, Any], index: int) -> AgentConfig:
 
 
 def parse_task_config(item: dict[str, Any], index: int) -> TaskConfig:
+    if not isinstance(item, dict):
+        raise ValueError(f"task[{index}] 必须是对象")
     raw_context = item.get("context_task_ids", [])
     if raw_context is None:
         context_task_ids: list[str] = []
@@ -57,6 +61,13 @@ def parse_task_config(item: dict[str, Any], index: int) -> TaskConfig:
         raise ValueError(f"task[{index}] context_task_ids 必须是列表或逗号分隔字符串")
 
     task_id = _required_str(item, "id", kind="task", index=index)
+    default_artifact_role = {
+        "review": "full_report",
+        "full_report": "full_report",
+        "summary": "summary",
+        "concise_report": "summary",
+    }.get(task_id, "none")
+    artifact_role = str(item.get("artifact_role") or default_artifact_role).strip()
     return TaskConfig(
         id=task_id,
         name=str(item.get("name") or task_id).strip(),
@@ -64,6 +75,7 @@ def parse_task_config(item: dict[str, Any], index: int) -> TaskConfig:
         expected_output=_required_str(item, "expected_output", kind="task", index=index),
         agent_id=_required_str(item, "agent_id", kind="task", index=index),
         context_task_ids=context_task_ids,
+        artifact_role=artifact_role,
         enabled=_optional_bool(item, "enabled", kind="task", index=index),
     )
 

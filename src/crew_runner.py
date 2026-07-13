@@ -23,7 +23,6 @@ from crewai_multiagent_demo.domain.tasks import TaskConfig
 from crewai_multiagent_demo.llm.model_registry import CREWAI_PROVIDER_PREFIX, MODEL_REGISTRY
 from crewai_multiagent_demo.utils.paths import DEFAULT_CONFIG_DIR, DEFAULT_OUTPUT_DIR, PROJECT_ROOT
 
-
 ROOT = PROJECT_ROOT
 CONFIG_DIR = DEFAULT_CONFIG_DIR
 AGENTS_FILE = CONFIG_DIR / "agents.json"
